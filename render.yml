@@ -1,8 +1,1 @@
-services:
-  - type: web
-    name: forex-signal-bot
-    env: python
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: python ai_signal_loop.py
-    runtime: python3.10
-    plan: free
+
