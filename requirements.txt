@@ -3,5 +3,6 @@ numpy
 pandas
 ta
 scikit-learn
-tensorflow
+tensorflow==2.12.0
 requests
+
