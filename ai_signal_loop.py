@@ -45,7 +45,7 @@ def send_telegram_message(text):
         try:
             bot.send_message(chat_id=CHAT_ID, text=text)
         except Exception as e:
-            print(f"Ошибка отправки в Telegram: {e}")
+            print(f"❌ Ошибка отправки сообщения в Telegram: {e}")
     else:
         print("❌ Telegram переменные окружения не заданы.")
 
