@@ -1,17 +1,24 @@
-# Файлы конфигурации и токены
-.env
+# Секретные ключи
 credentials.json
-forex_model.h5
 
-# Кэш Python
+# Модель
+*.h5
+
+# Python cache
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Логи, временные и выходные файлы
-ai_signal_output.csv
+# Логи
 *.log
 
-# OS/IDE служебные файлы
+# Jupyter
+.ipynb_checkpoints/
+
+# Mac OS / Windows мусор
 .DS_Store
-.vscode/
-.idea/
+Thumbs.db
+
+# Docker build files
+*.tar
