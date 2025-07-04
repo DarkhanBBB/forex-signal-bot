@@ -1,0 +1,16 @@
+# Файлы конфигурации и токены
+.env
+credentials.json
+
+# Кэш Python
+__pycache__/
+*.pyc
+
+# Логи, временные и выходные файлы
+ai_signal_output.csv
+*.log
+
+# OS/IDE служебные файлы
+.DS_Store
+.vscode/
+.idea/

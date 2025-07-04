@@ -1,7 +1,11 @@
-tensorflow-cpu==2.12.0
-scikit-learn
+yfinance
 pandas
 numpy
 ta
-yfinance
-python-telegram-bot==13.15
+tensorflow==2.15.0
+scikit-learn
+requests
+google-api-python-client
+google-auth
+google-auth-httplib2
+google-auth-oauthlib

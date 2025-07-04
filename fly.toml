@@ -1,1 +1,13 @@
 app = "forex-signal-bot"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  TELEGRAM_TOKEN = "8056190931:AAGG60aFwZN8yb7RPJWTWRzIsMsQDf_N_cE"
+  CHAT_ID = "6736814967"
+  GOOGLE_APPLICATION_CREDENTIALS = "/app/credentials.json"
+
+[experimental]
+  auto_rollback = true
