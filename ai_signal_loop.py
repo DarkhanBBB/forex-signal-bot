@@ -67,11 +67,16 @@ def download_model():
 
 def preprocess_data(data):
     data = data.dropna()
-    data['rsi'] = RSIIndicator(close=data['Close']).rsi()
+    close = data['Close'].values.flatten()  # ⬅️ делаем одномерным
+    rsi = RSIIndicator(close=close).rsi()
+    data['rsi'] = rsi
     data.dropna(inplace=True)
+
     X = data[['Close', 'rsi']].values
     y = (data['Close'].shift(-1) > data['Close']).astype(int).dropna().values
-    return X[:-1], y
+    X = X[:-1]
+
+    return np.array(X), np.array(y)
 
 def train_model(X, y):
     model = Sequential()
