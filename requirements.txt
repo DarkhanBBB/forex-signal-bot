@@ -3,6 +3,5 @@ numpy
 pandas
 ta
 scikit-learn
-tensorflow==2.12.0
+tensorflow-cpu==2.10.0
 requests
-
