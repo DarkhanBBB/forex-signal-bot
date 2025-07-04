@@ -1,12 +1,12 @@
-FROM python:3.11-slim
+FROM python:3.11
 
 WORKDIR /app
 
 COPY requirements.txt .
 
-# Устанавливаем системные зависимости для matplotlib и ta
 RUN apt-get update && \
-    apt-get install -y build-essential libatlas-base-dev libgl1-mesa-glx && \
+    apt-get install -y gcc g++ libglib2.0-0 libsm6 libxrender1 libxext6 && \
+    pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 COPY . .
