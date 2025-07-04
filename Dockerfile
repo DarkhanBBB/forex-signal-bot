@@ -1,26 +1,30 @@
-# Используем Python-образ с минимальной системой
-FROM python:3.10-slim
+# Базовый образ с Python
+FROM python:3.11-slim
 
-# Обновляем пакеты и устанавливаем системные зависимости
+# Установка системных зависимостей
 RUN apt-get update && apt-get install -y \
+    build-essential \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
     git \
     curl \
-    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Устанавливаем pip-зависимости
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Установка pipenv и обновление pip
+RUN pip install --upgrade pip
 
-# Копируем весь проект в директорию /app
+# Установка зависимостей
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+# Копируем весь проект в контейнер
 COPY . /app
 WORKDIR /app
 
-# Копируем credentials.json внутрь контейнера
-COPY credentials.json /app/credentials.json
+# Указываем переменную окружения для TensorFlow
+ENV TF_CPP_MIN_LOG_LEVEL=3
 
-# Устанавливаем переменную среды для авторизации Google API
-ENV GOOGLE_APPLICATION_CREDENTIALS="/app/credentials.json"
-
-# Команда запуска Python-бота
+# Команда запуска бота
 CMD ["python", "ai_signal_loop.py"]
