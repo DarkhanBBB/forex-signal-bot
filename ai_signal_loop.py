@@ -41,10 +41,10 @@ bot = telegram.Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN and CHAT_ID else None
 
 def send_telegram_message(text):
     if bot:
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(bot.send_message(chat_id=CHAT_ID, text=text))
+        try:
+            bot.send_message(chat_id=CHAT_ID, text=text)
+        except Exception as e:
+            print(f"❌ Ошибка отправки в Telegram: {e}")
     else:
         print("❌ Telegram переменные окружения не заданы.")
 
