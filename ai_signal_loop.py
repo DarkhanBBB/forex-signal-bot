@@ -14,15 +14,11 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 import telegram
 from collections import deque
-import matplotlib.pyplot as plt
-import asyncio
-import logging
 
 # === Конфигурация ===
 MODEL_FILENAME = 'forex_model.h5'
 SCOPES = ['https://www.googleapis.com/auth/drive']
 DRIVE_FOLDER_ID = '12GYefwcJwyo4mI4-MwdZzeLZrCAD1I09'
-LOG_FILENAME = 'bot_log.txt'
 
 # === Настройки Telegram ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -33,7 +29,6 @@ TIMEFRAME_MINUTES = 15
 INTERVAL = f'{TIMEFRAME_MINUTES}m'
 CONFIDENCE_THRESHOLD = 0.8
 SYMBOLS = ['EURUSD=X', 'XAUUSD=X']
-STARTUP_MESSAGE_SENT = False
 
 # === Авторизация Google Drive ===
 credentials = service_account.Credentials.from_service_account_file(
@@ -43,21 +38,14 @@ drive_service = build('drive', 'v3', credentials=credentials)
 # === Telegram бот ===
 bot = telegram.Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN and CHAT_ID else None
 
-# === Логирование в файл ===
-logging.basicConfig(filename=LOG_FILENAME, level=logging.INFO, format='%(asctime)s %(message)s')
-
-async def send_telegram_async(text):
+def send_telegram_message(text):
     if bot:
-        await bot.send_message(chat_id=CHAT_ID, text=text)
+        try:
+            bot.send_message(chat_id=CHAT_ID, text=text)
+        except Exception as e:
+            print(f"❌ Ошибка при отправке сообщения в Telegram: {e}")
     else:
         print("❌ Telegram переменные окружения не заданы.")
-
-def send_telegram_message(text):
-    try:
-        asyncio.run(send_telegram_async(text))
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-        loop.create_task(send_telegram_async(text))
 
 def upload_model(service):
     media = MediaFileUpload(MODEL_FILENAME, resumable=True)
@@ -66,15 +54,6 @@ def upload_model(service):
         'parents': [DRIVE_FOLDER_ID]
     }
     service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-
-def upload_log(service):
-    if os.path.exists(LOG_FILENAME):
-        media = MediaFileUpload(LOG_FILENAME, resumable=True)
-        file_metadata = {
-            'name': LOG_FILENAME,
-            'parents': [DRIVE_FOLDER_ID]
-        }
-        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
 def download_model(service):
     results = service.files().list(q=f"'{DRIVE_FOLDER_ID}' in parents and name='{MODEL_FILENAME}'",
@@ -122,21 +101,6 @@ def detect_market_structure(prices, lookback=20):
             bos_events.append((i, 'LL'))
     return bos_events
 
-def save_plot(data, symbol):
-    try:
-        plt.figure(figsize=(10, 4))
-        plt.plot(data['Close'], label='Close')
-        plt.title(f'{symbol} Price Action')
-        plt.xlabel('Time')
-        plt.ylabel('Price')
-        plt.legend()
-        filename = f"{symbol.replace('=X','')}_chart.png"
-        plt.savefig(filename)
-        return filename
-    except Exception as e:
-        print(f"Ошибка при сохранении графика: {e}")
-        return None
-
 def analyze_pair(symbol):
     print(f"\n📊 Анализ {symbol}...")
     end_date = datetime.utcnow()
@@ -175,38 +139,26 @@ def analyze_pair(symbol):
         message = f"📈 {symbol}\nСигнал: {direction}\nУверенность: {confidence:.2%}"
         send_telegram_message(message)
 
-        chart_file = save_plot(data, symbol)
-        if chart_file and bot:
-            with open(chart_file, 'rb') as photo:
-                asyncio.run(bot.send_photo(chat_id=CHAT_ID, photo=photo))
-
     model.fit(X, y, epochs=3, batch_size=32, verbose=0)
     model.save(MODEL_FILENAME)
     if drive_service:
         upload_model(drive_service)
-        upload_log(drive_service)
-        logging.info(f"✅ Модель дообучена по {symbol} и загружена на Google Drive.")
 
-def main():
-    global STARTUP_MESSAGE_SENT
-
+# === Главный цикл ===
+if __name__ == '__main__':
     if drive_service:
         download_model(drive_service)
 
-    if not STARTUP_MESSAGE_SENT:
+    # Один раз при первом запуске
+    if not os.path.exists("startup_flag.txt"):
         send_telegram_message("🤖 Бот успешно запущен и работает!")
-        STARTUP_MESSAGE_SENT = True
+        with open("startup_flag.txt", "w") as f:
+            f.write("started")
 
     while True:
         for sym in SYMBOLS:
             try:
                 analyze_pair(sym)
             except Exception as e:
-                error_msg = f"❌ Ошибка при анализе {sym}: {str(e)}"
-                print(error_msg)
-                logging.error(error_msg)
-                send_telegram_message(error_msg)
+                print(f"❌ Ошибка при анализе {sym}: {str(e)}")
         time.sleep(1800)  # каждые 30 минут
-
-if __name__ == '__main__':
-    main()
