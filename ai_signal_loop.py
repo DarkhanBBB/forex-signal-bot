@@ -199,7 +199,7 @@ if __name__ == '__main__':
                 print(f"❌ Ошибка при анализе {sym}: {e}")
 
         if model:
-upload_model(drive_service)  # ← ❌ нет отступа — будет ошибка
+    upload_model(drive_service)  # ← ❌ нет отступа — будет ошибка
 
         print(f"🕒 Пауза {CHECK_INTERVAL_MINUTES} минут...\n")
         time.sleep(CHECK_INTERVAL_MINUTES * 60)
