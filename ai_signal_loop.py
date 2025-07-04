@@ -97,6 +97,7 @@ def analyze_pair(symbol):
         start=start_date.strftime('%Y-%m-%d'),
         end=end_date.strftime('%Y-%m-%d'),
         interval=INTERVAL
+        )
     except Exception as e:
         print(f"❌ Ошибка при загрузке данных: {e}")
         return
