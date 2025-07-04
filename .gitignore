@@ -1,6 +1,7 @@
 # Файлы конфигурации и токены
 .env
 credentials.json
+forex_model.h5
 
 # Кэш Python
 __pycache__/

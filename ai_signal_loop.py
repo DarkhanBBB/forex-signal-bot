@@ -1,121 +1,158 @@
 import os
-import json
-import yfinance as yf
-import pandas as pd
+import time
+import joblib
 import numpy as np
-import tensorflow as tf
+import pandas as pd
+import yfinance as yf
+from datetime import datetime, timedelta
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, Dropout
-import ta
-from datetime import datetime, timedelta
-import requests
+from ta.momentum import RSIIndicator
+from ta.trend import EMAIndicator, MACD
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import io
+import requests
 
-# === 1. Telegram-настройки ===
-BOT_TOKEN = os.getenv("8056190931:AAGG60aFwZN8yb7RPJWTWRzIsMsQDf_N_cE")
-CHAT_ID = os.getenv("6736814967")
+# === НАСТРОЙКИ ===
+SCOPES = ['https://www.googleapis.com/auth/drive']
+GDRIVE_FOLDER_ID = '12GYefwcJwyo4mI4-MwdZzeLZrCAD1I09'
+MODEL_FILENAME = 'forex_model.h5'
+CREDENTIALS_FILE = 'credentials.json'
+CHECK_INTERVAL_MINUTES = 30
+CONFIDENCE_THRESHOLD = 0.8
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
 
-# === 2. Google Drive авторизация ===
+
+# === Авторизация Google Drive ===
 def get_drive_service():
-    creds = service_account.Credentials.from_service_account_file(
-        os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
-        scopes=["https://www.googleapis.com/auth/drive"],
-    )
-    return build("drive", "v3", credentials=creds)
+    credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+    return build('drive', 'v3', credentials=credentials)
+    if os.path.exists(MODEL_FILENAME):
+    upload_model(drive_service)
+else:
+    print("⚠️ Модель ещё не обучена, файл не найден.")
 
-def download_model_from_drive(file_id, filename):
-    service = get_drive_service()
+def download_model(service):
+    query = f"'{GDRIVE_FOLDER_ID}' in parents and name='{MODEL_FILENAME}' and trashed=false"
+    results = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+    items = results.get('files', [])
+    if not items:
+        print("⚠️ Модель не найдена на Google Drive.")
+        return False
+    file_id = items[0]['id']
     request = service.files().get_media(fileId=file_id)
-    fh = io.FileIO(filename, "wb")
+    fh = io.FileIO(MODEL_FILENAME, 'wb')
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done:
         _, done = downloader.next_chunk()
+    print("✅ Модель загружена с Google Drive.")
+    return True
 
-def upload_model_to_drive(file_id, filename):
-    service = get_drive_service()
-    media = MediaFileUpload(filename, resumable=True)
-    service.files().update(fileId=file_id, media_body=media).execute()
+def upload_model(service):
+    query = f"'{GDRIVE_FOLDER_ID}' in parents and name='{MODEL_FILENAME}' and trashed=false"
+    results = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+    items = results.get('files', [])
+    media = MediaFileUpload(MODEL_FILENAME, resumable=True)
+    if items:
+        file_id = items[0]['id']
+        service.files().update(fileId=file_id, media_body=media).execute()
+    else:
+        file_metadata = {'name': MODEL_FILENAME, 'parents': [GDRIVE_FOLDER_ID]}
+        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+    print("✅ Модель обновлена на Google Drive.")
 
-# === 3. Настройки модели и Drive ===
-MODEL_FILE = "forex_model.h5"
-DRIVE_FILE_ID = "12GYefwcJwyo4mI4-MwdZzeLZrCAD1I09"  # заменишь на ID своего файла
+# === Обработка пары ===
+def analyze_pair(ticker):
+    print(f"\n📊 Анализ {ticker}...")
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=59)
+    data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'),
+                       interval='15m', progress=False)
 
-# === 4. Загрузка данных ===
-def load_data(symbol):
-    end = datetime.utcnow()
-    start = end - timedelta(days=90)
-    df = yf.download(symbol, start=start, end=end, interval='15m')
-    df['rsi'] = ta.momentum.RSIIndicator(df['Close'], 14).rsi()
-    df['ema'] = ta.trend.EMAIndicator(df['Close'], 20).ema_indicator()
-    df['macd'] = ta.trend.MACD(df['Close']).macd_diff()
-    df.dropna(inplace=True)
-    return df
+    if data.empty or len(data) < 100:
+        print("⚠️ Недостаточно данных.")
+        return
 
-# === 5. Подготовка данных ===
-def preprocess(df):
+    close = data['Close']
+    data['rsi'] = RSIIndicator(close).rsi()
+    data['ema'] = EMAIndicator(close, window=20).ema_indicator()
+    data['macd'] = MACD(close).macd_diff()
+    data.dropna(inplace=True)
+
     features = ['Close', 'rsi', 'ema', 'macd']
     scaler = MinMaxScaler()
-    data = scaler.fit_transform(df[features])
-    X, y = [], []
-    for i in range(24, len(data)):
-        X.append(data[i-24:i])
-        y.append(1 if data[i, 0] > data[i-1, 0] else 0)
-    return np.array(X), np.array(y), scaler
+    scaled_data = scaler.fit_transform(data[features].values)
 
-# === 6. Обработка инструмента ===
-def handle_symbol(symbol):
-    df = load_data(symbol)
-    X, y, scaler = preprocess(df)
+    def create_sequences(data, window=24):
+        X, y = [], []
+        for i in range(window, len(data)):
+            X.append(data[i - window:i])
+            y.append(1 if data[i, 0] > data[i - 1, 0] else 0)
+        return np.array(X), np.array(y)
 
-    # Загрузка или обучение модели
-    if os.path.exists(MODEL_FILE):
-        model = load_model(MODEL_FILE)
+    X, y = create_sequences(scaled_data)
+    if len(X) == 0:
+        print("⚠️ Недостаточно данных для обучения.")
+        return
+    X = X.reshape((X.shape[0], X.shape[1], len(features)))
+
+    # === Обучение или загрузка модели ===
+    if os.path.exists(MODEL_FILENAME):
+        model = load_model(MODEL_FILENAME)
+        model.fit(X, y, epochs=2, batch_size=32, verbose=0)
     else:
-        model = Sequential([
-            LSTM(64, return_sequences=True, input_shape=(X.shape[1], X.shape[2])),
-            Dropout(0.2),
-            LSTM(32),
-            Dense(1, activation='sigmoid')
-        ])
+        model = Sequential()
+        model.add(LSTM(64, return_sequences=True, input_shape=(X.shape[1], X.shape[2])))
+        model.add(Dropout(0.2))
+        model.add(LSTM(32))
+        model.add(Dense(1, activation='sigmoid'))
         model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+        model.fit(X, y, epochs=10, batch_size=32, verbose=1)
 
-    model.fit(X, y, epochs=3, batch_size=32, verbose=0)
-    model.save(MODEL_FILE)
+    model.save(MODEL_FILENAME)
 
-    # Отправка в Google Drive
-    upload_model_to_drive(DRIVE_FILE_ID, MODEL_FILE)
+    # === Прогноз ===
+    last_seq = scaled_data[-24:]
+    last_seq = last_seq.reshape((1, 24, len(features)))
+    prediction = float(model.predict(last_seq, verbose=0)[0][0])
+    confidence = round(prediction, 4)
 
-    last_seq = X[-1].reshape(1, 24, 4)
-    prediction = float(model.predict(last_seq)[0][0])
+    # === Сигнал ===
+    last_high = data['High'].iloc[-14:]
+    last_low = data['Low'].iloc[-14:]
+    atr_val = (last_high.max() - last_low.min())
+    close_price = float(data['Close'].iloc[-1])
     direction = 'BUY' if prediction > 0.5 else 'SELL'
+    tp = close_price + atr_val * 0.5 if direction == 'BUY' else close_price - atr_val * 0.5
+    sl = close_price - atr_val * 0.5 if direction == 'BUY' else close_price + atr_val * 0.5
 
-    high = df['High'].iloc[-14:].max()
-    low = df['Low'].iloc[-14:].min()
-    atr = high - low
-    close = df['Close'].iloc[-1]
-
-    tp = close + atr * 0.5 if direction == 'BUY' else close - atr * 0.5
-    sl = close - atr * 0.5 if direction == 'BUY' else close + atr * 0.5
-
-    return {
-        'symbol': symbol,
+    signal = {
         'timestamp': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+        'pair': ticker,
         'direction': direction,
-        'entry_price': round(close, 5),
+        'entry_price': round(close_price, 5),
         'take_profit': round(tp, 5),
         'stop_loss': round(sl, 5),
-        'confidence': round(prediction, 4)
+        'confidence': confidence
     }
 
-# === 7. Telegram-уведомление ===
-def send_to_telegram(signal):
-    msg = f"""📈 <b>Сигнал от нейросети</b>
-<b>Инструмент:</b> {signal['symbol']}
+    if confidence >= CONFIDENCE_THRESHOLD:
+        send_telegram_signal(signal)
+    else:
+        print(f"ℹ️ Уверенность {confidence*100:.2f}% ниже порога.")
+
+def send_telegram_signal(signal):
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("❌ Telegram переменные окружения не заданы.")
+        return
+
+    message = f"""📈 <b>Сигнал от нейросети</b>
+<b>Пара:</b> {signal['pair']}
 <b>Время:</b> {signal['timestamp']}
 <b>Сигнал:</b> {signal['direction']}
 <b>Цена входа:</b> {signal['entry_price']}
@@ -123,20 +160,46 @@ def send_to_telegram(signal):
 <b>SL:</b> {signal['stop_loss']}
 <b>Уверенность:</b> {signal['confidence']*100:.2f}%"""
 
-    r = requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
-    )
-    if r.status_code == 200:
-        print("✅ Сообщение отправлено")
-    else:
-        print("❌ Ошибка Telegram:", r.text)
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
+    }
 
-# === 8. Запуск цикла ===
-if __name__ == "__main__":
-    for symbol in ['EURUSD=X', 'XAUUSD=X']:
-        signal = handle_symbol(symbol)
-        if signal['confidence'] >= 0.8:
-            send_to_telegram(signal)
-        else:
-            print(f"🔕 Нет сигнала для {symbol}, уверенность: {signal['confidence']}")
+    response = requests.post(url, json=payload)
+    if response.status_code == 200:
+        print("✅ Сигнал отправлен в Telegram.")
+    else:
+        print("❌ Ошибка при отправке в Telegram:", response.text)
+
+# === Основной цикл ===
+if __name__ == '__main__':
+    drive_service = get_drive_service()
+    download_model(drive_service)
+    printed_start = False
+
+    while True:
+        if not printed_start:
+            send_telegram_signal({
+                'pair': 'INFO',
+                'timestamp': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                'direction': 'RUNNING',
+                'entry_price': 0,
+                'take_profit': 0,
+                'stop_loss': 0,
+                'confidence': 1.0
+            })
+            printed_start = True
+
+        for sym in ['EURUSD=X', 'XAUUSD=X']:
+            try:
+                analyze_pair(sym)
+            except Exception as e:
+                print(f"❌ Ошибка при анализе {sym}: {e}")
+
+        if model:
+upload_model(drive_service)  # ← ❌ нет отступа — будет ошибка
+
+        print(f"🕒 Пауза {CHECK_INTERVAL_MINUTES} минут...\n")
+        time.sleep(CHECK_INTERVAL_MINUTES * 60)
