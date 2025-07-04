@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import tensorflow as tf
+import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Dense
@@ -32,33 +33,28 @@ SYMBOLS = ['EURUSD=X', 'XAUUSD=X']
 STARTUP_MESSAGE_SENT = False
 
 # === Авторизация Google Drive ===
-credentials = service_account.Credentials.from_service_account_file(
-    'credentials.json', scopes=SCOPES)
+credentials = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
 drive_service = build('drive', 'v3', credentials=credentials)
 
 # === Telegram бот ===
 bot = telegram.Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN and CHAT_ID else None
 
 def send_telegram_message(text):
-    try:
-        if bot:
-            bot.send_message(chat_id=CHAT_ID, text=text)
-        else:
-            print("❌ Telegram переменные окружения не заданы.")
-    except Exception as e:
-        print(f"❌ Ошибка Telegram: {e}")
+    if bot:
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(bot.send_message(chat_id=CHAT_ID, text=text))
+    else:
+        print("❌ Telegram переменные окружения не заданы.")
 
 def upload_model(service):
     media = MediaFileUpload(MODEL_FILENAME, resumable=True)
-    file_metadata = {
-        'name': MODEL_FILENAME,
-        'parents': [DRIVE_FOLDER_ID]
-    }
+    file_metadata = {'name': MODEL_FILENAME, 'parents': [DRIVE_FOLDER_ID]}
     service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
 def download_model(service):
-    results = service.files().list(q=f"'{DRIVE_FOLDER_ID}' in parents and name='{MODEL_FILENAME}'",
-                                   spaces='drive', fields='files(id, name)').execute()
+    results = service.files().list(q=f"'{DRIVE_FOLDER_ID}' in parents and name='{MODEL_FILENAME}'", spaces='drive', fields='files(id, name)').execute()
     items = results.get('files', [])
     if not items:
         print("⚠️ Модель не найдена на Google Drive.")
@@ -105,12 +101,7 @@ def detect_market_structure(prices, lookback=20):
 def analyze_pair(symbol):
     print(f"\n📊 Анализ {symbol}...")
     end_date = datetime.utcnow()
-
-    if INTERVAL == '15m':
-        start_date = end_date - timedelta(days=7)
-    else:
-        start_date = end_date - timedelta(days=30)
-
+    start_date = end_date - timedelta(days=7 if INTERVAL == '15m' else 30)
     data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=INTERVAL)
 
     if data.empty or len(data) < 50:
@@ -145,9 +136,9 @@ def analyze_pair(symbol):
     if drive_service:
         upload_model(drive_service)
 
-# === Главный цикл ===
 def main():
     global STARTUP_MESSAGE_SENT
+
     if drive_service:
         download_model(drive_service)
 
@@ -160,8 +151,10 @@ def main():
             try:
                 analyze_pair(sym)
             except Exception as e:
-                print(f"❌ Ошибка при анализе {sym}: {str(e)}")
-        time.sleep(1800)  # каждые 30 минут
+                error_msg = f"❌ Ошибка при анализе {sym}: {str(e)}"
+                print(error_msg)
+                send_telegram_message(error_msg)
+        time.sleep(1800)
 
 if __name__ == '__main__':
     main()
