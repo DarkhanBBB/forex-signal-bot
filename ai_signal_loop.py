@@ -35,6 +35,7 @@ STARTUP_MESSAGE_SENT = False
 # === Авторизация Google Drive ===
 credentials = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
 drive_service = build('drive', 'v3', credentials=credentials)
+drive_service = None  # временно отключаем
 
 # === Telegram бот ===
 bot = telegram.Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN and CHAT_ID else None
@@ -44,7 +45,7 @@ def send_telegram_message(text):
         try:
             bot.send_message(chat_id=CHAT_ID, text=text)
         except Exception as e:
-            print(f"❌ Ошибка отправки в Telegram: {e}")
+            print(f"Ошибка отправки в Telegram: {e}")
     else:
         print("❌ Telegram переменные окружения не заданы.")
 
