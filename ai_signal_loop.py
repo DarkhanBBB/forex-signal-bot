@@ -33,9 +33,8 @@ SYMBOLS = ['EURUSD=X', 'XAUUSD=X']
 STARTUP_MESSAGE_SENT = False
 
 # === Авторизация Google Drive ===
-# credentials = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
-# drive_service = build('drive', 'v3', credentials=credentials)
-drive_service = None  # временно отключаем
+credentials = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
+drive_service = build('drive', 'v3', credentials=credentials)
 
 # === Telegram бот ===
 bot = telegram.Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN and CHAT_ID else None
