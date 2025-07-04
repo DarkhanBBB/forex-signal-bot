@@ -29,6 +29,7 @@ TIMEFRAME_MINUTES = 15
 INTERVAL = f'{TIMEFRAME_MINUTES}m'
 CONFIDENCE_THRESHOLD = 0.8
 SYMBOLS = ['EURUSD=X', 'XAUUSD=X']
+STARTUP_MESSAGE_SENT = False
 
 # === Авторизация Google Drive ===
 credentials = service_account.Credentials.from_service_account_file(
@@ -39,13 +40,13 @@ drive_service = build('drive', 'v3', credentials=credentials)
 bot = telegram.Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN and CHAT_ID else None
 
 def send_telegram_message(text):
-    if bot:
-        try:
+    try:
+        if bot:
             bot.send_message(chat_id=CHAT_ID, text=text)
-        except Exception as e:
-            print(f"❌ Ошибка при отправке сообщения в Telegram: {e}")
-    else:
-        print("❌ Telegram переменные окружения не заданы.")
+        else:
+            print("❌ Telegram переменные окружения не заданы.")
+    except Exception as e:
+        print(f"❌ Ошибка Telegram: {e}")
 
 def upload_model(service):
     media = MediaFileUpload(MODEL_FILENAME, resumable=True)
@@ -145,15 +146,14 @@ def analyze_pair(symbol):
         upload_model(drive_service)
 
 # === Главный цикл ===
-if __name__ == '__main__':
+def main():
+    global STARTUP_MESSAGE_SENT
     if drive_service:
         download_model(drive_service)
 
-    # Один раз при первом запуске
-    if not os.path.exists("startup_flag.txt"):
+    if not STARTUP_MESSAGE_SENT:
         send_telegram_message("🤖 Бот успешно запущен и работает!")
-        with open("startup_flag.txt", "w") as f:
-            f.write("started")
+        STARTUP_MESSAGE_SENT = True
 
     while True:
         for sym in SYMBOLS:
@@ -162,3 +162,6 @@ if __name__ == '__main__':
             except Exception as e:
                 print(f"❌ Ошибка при анализе {sym}: {str(e)}")
         time.sleep(1800)  # каждые 30 минут
+
+if __name__ == '__main__':
+    main()
