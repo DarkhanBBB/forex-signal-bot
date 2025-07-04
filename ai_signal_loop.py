@@ -14,9 +14,11 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 import telegram
 from collections import deque
+import matplotlib.pyplot as plt
 
 # === Конфигурация ===
 MODEL_FILENAME = 'forex_model.h5'
+LOG_FILENAME = 'bot_log.txt'
 SCOPES = ['https://www.googleapis.com/auth/drive']
 DRIVE_FOLDER_ID = '12GYefwcJwyo4mI4-MwdZzeLZrCAD1I09'
 
@@ -39,12 +41,23 @@ drive_service = build('drive', 'v3', credentials=credentials)
 # === Telegram бот ===
 bot = telegram.Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN and CHAT_ID else None
 
+def log_event(message):
+    with open(LOG_FILENAME, 'a', encoding='utf-8') as f:
+        f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
+
 def send_telegram_message(text):
     if bot:
         import asyncio
         asyncio.run(bot.send_message(chat_id=CHAT_ID, text=text))
     else:
         print("❌ Telegram переменные окружения не заданы.")
+
+def send_telegram_image(path):
+    if bot:
+        import asyncio
+        from telegram import InputFile
+        with open(path, 'rb') as f:
+            asyncio.run(bot.send_photo(chat_id=CHAT_ID, photo=InputFile(f)))
 
 def upload_model(service):
     media = MediaFileUpload(MODEL_FILENAME, resumable=True)
@@ -100,6 +113,18 @@ def detect_market_structure(prices, lookback=20):
             bos_events.append((i, 'LL'))
     return bos_events
 
+def plot_signal(data, symbol):
+    plt.figure(figsize=(10, 4))
+    plt.plot(data['Close'], label='Close Price')
+    plt.title(f"{symbol} - Close Price")
+    plt.xlabel("Time")
+    plt.ylabel("Price")
+    plt.legend()
+    path = f"chart_{symbol.replace('=X','')}.png"
+    plt.savefig(path)
+    plt.close()
+    return path
+
 def analyze_pair(symbol):
     print(f"\n📊 Анализ {symbol}...")
     end_date = datetime.utcnow()
@@ -116,7 +141,6 @@ def analyze_pair(symbol):
         return
 
     X, y = preprocess_data(data)
-
     bos_events = detect_market_structure(data['Close'].values)
     if bos_events:
         last_bos = bos_events[-1]
@@ -137,11 +161,15 @@ def analyze_pair(symbol):
         direction = "🔼 Покупка" if confidence > 0.5 else "🔽 Продажа"
         message = f"📈 {symbol}\nСигнал: {direction}\nУверенность: {confidence:.2%}"
         send_telegram_message(message)
+        chart_path = plot_signal(data, symbol)
+        send_telegram_image(chart_path)
 
     model.fit(X, y, epochs=3, batch_size=32, verbose=0)
+    send_telegram_message(f"✅ Дообучение модели для {symbol} завершено")
     model.save(MODEL_FILENAME)
     if drive_service:
         upload_model(drive_service)
+    log_event(f"✅ Сигнал обработан для {symbol} с уверенностью {confidence:.2%}")
 
 # === Главный цикл ===
 if __name__ == '__main__':
@@ -150,6 +178,7 @@ if __name__ == '__main__':
 
     if not STARTUP_MESSAGE_SENT:
         send_telegram_message("🤖 Бот успешно запущен и работает!")
+        log_event("✅ Бот запущен")
         STARTUP_MESSAGE_SENT = True
 
     while True:
@@ -157,5 +186,8 @@ if __name__ == '__main__':
             try:
                 analyze_pair(sym)
             except Exception as e:
-                print(f"❌ Ошибка при анализе {sym}: {str(e)}")
+                error_message = f"❌ Ошибка при анализе {sym}: {str(e)}"
+                print(error_message)
+                send_telegram_message(error_message)
+                log_event(error_message)
         time.sleep(1800)  # каждые 30 минут
