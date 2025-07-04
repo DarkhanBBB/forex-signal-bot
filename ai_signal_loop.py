@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 
 # === Конфигурация ===
 MODEL_FILENAME = 'forex_model.h5'
-LOG_FILENAME = 'bot_log.txt'
+LOG_FILENAME = 'forex_log.txt'
 SCOPES = ['https://www.googleapis.com/auth/drive']
 DRIVE_FOLDER_ID = '12GYefwcJwyo4mI4-MwdZzeLZrCAD1I09'
 
@@ -27,44 +27,43 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 # === Настройки анализа ===
-TIMEFRAME_MINUTES = 15
-INTERVAL = f'{TIMEFRAME_MINUTES}m'
+TIMEFRAMES = {'15m': 7, '30m': 14, '60m': 30, '240m': 60}  # дни для каждого таймфрейма
 CONFIDENCE_THRESHOLD = 0.8
 SYMBOLS = ['EURUSD=X', 'XAUUSD=X']
 STARTUP_MESSAGE_SENT = False
 
 # === Авторизация Google Drive ===
-credentials = service_account.Credentials.from_service_account_file(
-    'credentials.json', scopes=SCOPES)
+credentials = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
 drive_service = build('drive', 'v3', credentials=credentials)
 
 # === Telegram бот ===
 bot = telegram.Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN and CHAT_ID else None
 
-def log_event(message):
-    with open(LOG_FILENAME, 'a', encoding='utf-8') as f:
-        f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
-
 def send_telegram_message(text):
     if bot:
         import asyncio
-        asyncio.run(bot.send_message(chat_id=CHAT_ID, text=text))
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(bot.send_message(chat_id=CHAT_ID, text=text))
+        loop.close()
     else:
         print("❌ Telegram переменные окружения не заданы.")
 
-def send_telegram_image(path):
-    if bot:
-        import asyncio
-        from telegram import InputFile
-        with open(path, 'rb') as f:
-            asyncio.run(bot.send_photo(chat_id=CHAT_ID, photo=InputFile(f)))
+def save_log_to_drive():
+    if os.path.exists(LOG_FILENAME):
+        media = MediaFileUpload(LOG_FILENAME, resumable=True)
+        file_metadata = {'name': LOG_FILENAME, 'parents': [DRIVE_FOLDER_ID]}
+        drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+def log_event(message):
+    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    with open(LOG_FILENAME, 'a') as f:
+        f.write(f"[{timestamp}] {message}\n")
+
 
 def upload_model(service):
     media = MediaFileUpload(MODEL_FILENAME, resumable=True)
-    file_metadata = {
-        'name': MODEL_FILENAME,
-        'parents': [DRIVE_FOLDER_ID]
-    }
+    file_metadata = {'name': MODEL_FILENAME, 'parents': [DRIVE_FOLDER_ID]}
     service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
 def download_model(service):
@@ -113,28 +112,23 @@ def detect_market_structure(prices, lookback=20):
             bos_events.append((i, 'LL'))
     return bos_events
 
-def plot_signal(data, symbol):
-    plt.figure(figsize=(10, 4))
-    plt.plot(data['Close'], label='Close Price')
-    plt.title(f"{symbol} - Close Price")
-    plt.xlabel("Time")
-    plt.ylabel("Price")
+def save_bos_plot(data, bos_events, symbol, interval):
+    plt.figure(figsize=(10, 5))
+    plt.plot(data['Close'], label='Close')
+    for idx, bos_type in bos_events:
+        plt.scatter(idx, data['Close'].iloc[idx], label=bos_type, color='red' if bos_type == 'LL' else 'green')
+    plt.title(f'{symbol} - BOS ({interval})')
     plt.legend()
-    path = f"chart_{symbol.replace('=X','')}.png"
-    plt.savefig(path)
+    filename = f'bos_{symbol.replace("=", "")}_{interval}.png'
+    plt.savefig(filename)
     plt.close()
-    return path
+    return filename
 
-def analyze_pair(symbol):
-    print(f"\n📊 Анализ {symbol}...")
+def analyze_pair(symbol, interval):
+    print(f"\n📊 Анализ {symbol} [{interval}]...")
     end_date = datetime.utcnow()
-
-    if INTERVAL == '15m':
-        start_date = end_date - timedelta(days=7)
-    else:
-        start_date = end_date - timedelta(days=30)
-
-    data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=INTERVAL)
+    start_date = end_date - timedelta(days=TIMEFRAMES[interval])
+    data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=interval)
 
     if data.empty or len(data) < 50:
         print("⚠️ Недостаточно данных.")
@@ -143,10 +137,11 @@ def analyze_pair(symbol):
     X, y = preprocess_data(data)
     bos_events = detect_market_structure(data['Close'].values)
     if bos_events:
-        last_bos = bos_events[-1]
-        bos_time = data.index[last_bos[0]]
-        bos_type = last_bos[1]
+        bos_time = data.index[bos_events[-1][0]]
+        bos_type = bos_events[-1][1]
         print(f"📉 BOS обнаружен: {bos_type} на {bos_time}")
+        image_file = save_bos_plot(data, bos_events, symbol, interval)
+        bot.send_photo(chat_id=CHAT_ID, photo=open(image_file, 'rb'))
 
     if os.path.exists(MODEL_FILENAME):
         model = load_model(MODEL_FILENAME)
@@ -159,35 +154,38 @@ def analyze_pair(symbol):
 
     if confidence > CONFIDENCE_THRESHOLD:
         direction = "🔼 Покупка" if confidence > 0.5 else "🔽 Продажа"
-        message = f"📈 {symbol}\nСигнал: {direction}\nУверенность: {confidence:.2%}"
+        message = f"📈 {symbol} [{interval}]\nСигнал: {direction}\nУверенность: {confidence:.2%}"
         send_telegram_message(message)
-        chart_path = plot_signal(data, symbol)
-        send_telegram_image(chart_path)
 
     model.fit(X, y, epochs=3, batch_size=32, verbose=0)
-    send_telegram_message(f"✅ Дообучение модели для {symbol} завершено")
     model.save(MODEL_FILENAME)
-    if drive_service:
-        upload_model(drive_service)
-    log_event(f"✅ Сигнал обработан для {symbol} с уверенностью {confidence:.2%}")
+    upload_model(drive_service)
+    log_event(f"✅ Дообучение модели для {symbol} завершено.")
+    send_telegram_message(f"✅ Модель для {symbol} [{interval}] дообучена и обновлена.")
 
 # === Главный цикл ===
 if __name__ == '__main__':
-    if drive_service:
-        download_model(drive_service)
+    try:
+        if drive_service:
+            download_model(drive_service)
 
-    if not STARTUP_MESSAGE_SENT:
-        send_telegram_message("🤖 Бот успешно запущен и работает!")
-        log_event("✅ Бот запущен")
-        STARTUP_MESSAGE_SENT = True
+        if not STARTUP_MESSAGE_SENT:
+            send_telegram_message("🤖 Бот успешно запущен и работает!")
+            STARTUP_MESSAGE_SENT = True
 
-    while True:
-        for sym in SYMBOLS:
-            try:
-                analyze_pair(sym)
-            except Exception as e:
-                error_message = f"❌ Ошибка при анализе {sym}: {str(e)}"
-                print(error_message)
-                send_telegram_message(error_message)
-                log_event(error_message)
-        time.sleep(1800)  # каждые 30 минут
+        while True:
+            for tf in TIMEFRAMES:
+                for sym in SYMBOLS:
+                    try:
+                        analyze_pair(sym, tf)
+                    except Exception as e:
+                        err = f"❌ Ошибка при анализе {sym} [{tf}]: {str(e)}"
+                        print(err)
+                        send_telegram_message(err)
+                        log_event(err)
+            save_log_to_drive()
+            time.sleep(1800)  # каждые 30 минут
+    except Exception as fatal:
+        send_telegram_message(f"💥 Критическая ошибка: {str(fatal)}")
+        log_event(f"💥 Критическая ошибка: {str(fatal)}")
+        save_log_to_drive()
