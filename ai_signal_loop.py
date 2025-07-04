@@ -30,7 +30,7 @@ TIMEFRAME_MINUTES = 15
 INTERVAL = f'{TIMEFRAME_MINUTES}m'
 CONFIDENCE_THRESHOLD = 0.8
 SYMBOLS = ['EURUSD=X', 'XAUUSD=X']
-STARTUP_MESSAGE_SENT = False
+startup_message_sent_once = False
 
 # === Авторизация Google Drive ===
 credentials = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
@@ -42,10 +42,12 @@ bot = telegram.Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN and CHAT_ID else None
 
 def send_telegram_message(text):
     if bot:
-        try:
-            bot.send_message(chat_id=CHAT_ID, text=text)
-        except Exception as e:
-            print(f"❌ Ошибка отправки сообщения в Telegram: {e}")
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        coro = bot.send_message(chat_id=CHAT_ID, text=text)
+        loop.run_until_complete(coro)
+        loop.close()
     else:
         print("❌ Telegram переменные окружения не заданы.")
 
@@ -106,7 +108,8 @@ def analyze_pair(symbol):
     data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=INTERVAL)
 
     if data.empty or len(data) < 50:
-        print("⚠️ Недостаточно данных.")
+        print("⚠️ Недостаточно данных. Вероятно, рынок закрыт.")
+        send_telegram_message(f"📴 Рынок закрыт или нет данных для {symbol}, анализ отложен.")
         return
 
     X, y = preprocess_data(data)
@@ -138,14 +141,14 @@ def analyze_pair(symbol):
         upload_model(drive_service)
 
 def main():
-    global STARTUP_MESSAGE_SENT
+    global startup_message_sent_once
 
     if drive_service:
         download_model(drive_service)
 
-    if not STARTUP_MESSAGE_SENT:
+    if not startup_message_sent_once:
         send_telegram_message("🤖 Бот успешно запущен и работает!")
-        STARTUP_MESSAGE_SENT = True
+        startup_message_sent_once = True
 
     while True:
         for sym in SYMBOLS:
