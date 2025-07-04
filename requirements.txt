@@ -1,6 +1,7 @@
-tensorflow-cpu==2.10.0
-pandas
-yfinance
+tensorflow-cpu==2.12.0
 scikit-learn
+pandas
+numpy
 ta
+yfinance
 python-telegram-bot==13.15
