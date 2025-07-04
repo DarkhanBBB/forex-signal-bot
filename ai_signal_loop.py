@@ -72,7 +72,7 @@ def download_model():
 
 def preprocess_data(data):
     close = data['Close']
-    data['rsi'] = RSIIndicator(close=close).rsi()
+    data['rsi'] = RSIIndicator(close=data['Close']).rsi()
     data.dropna(inplace=True)
     X = data[['Close', 'rsi']].values
     y = (data['Close'].shift(-1) > data['Close']).astype(int).dropna().values
