@@ -1,3 +1,5 @@
+# advanced_ai_signal_bot.py
+
 import os
 import asyncio
 import logging
@@ -25,16 +27,13 @@ TIMEFRAMES = {'15m': 7, '30m': 14, '1h': 30, '4h': 60}
 CONFIDENCE_THRESHOLD = 0.8
 SYMBOLS = ['EURUSD=X', 'XAUUSD=X']
 
-# === Переменные окружения ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# === Telegram бот ===
 bot = Bot(token=TELEGRAM_TOKEN)
 
 # === Авторизация Google Drive ===
-credentials = service_account.Credentials.from_service_account_file(
-    'credentials.json', scopes=SCOPES)
+credentials = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
 drive_service = build('drive', 'v3', credentials=credentials)
 
 # === Логирование ===
@@ -67,51 +66,61 @@ def download_model():
 
 def preprocess_data(data):
     data = data.dropna()
-    close = data['Close'].values.flatten()  # ⬅️ делаем одномерным
+    close = data['Close'].values.flatten()
     rsi = RSIIndicator(close=close).rsi()
     data['rsi'] = rsi
     data.dropna(inplace=True)
-
     X = data[['Close', 'rsi']].values
     y = (data['Close'].shift(-1) > data['Close']).astype(int).dropna().values
     X = X[:-1]
-
     return np.array(X), np.array(y)
 
 def train_model(X, y):
-    model = Sequential()
-    model.add(Dense(64, activation='relu', input_shape=(X.shape[1],)))
-    model.add(Dense(32, activation='relu'))
-    model.add(Dense(1, activation='sigmoid'))
+    model = Sequential([
+        Dense(64, activation='relu', input_shape=(X.shape[1],)),
+        Dense(32, activation='relu'),
+        Dense(1, activation='sigmoid')
+    ])
     model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
     model.fit(X, y, epochs=5, batch_size=32, verbose=0)
     return model
 
-def detect_bos(prices):
-    highs, lows, bos = deque(maxlen=20), deque(maxlen=20), []
+def detect_smart_zones(prices):
+    prices = pd.Series(prices.flatten())
+    highs, lows, zones = deque(maxlen=20), deque(maxlen=20), []
     for i in range(1, len(prices)):
-        if prices[i] > prices[i - 1]:
-            highs.append(prices[i])
-        elif prices[i] < prices[i - 1]:
-            lows.append(prices[i])
-        if len(highs) >= 2 and highs[-1] > highs[-2]:
-            bos.append((i, 'HH'))
-        if len(lows) >= 2 and lows[-1] < lows[-2]:
-            bos.append((i, 'LL'))
-    return bos
+        if prices[i] > prices[i-1]:
+            highs.append((i, prices[i]))
+        elif prices[i] < prices[i-1]:
+            lows.append((i, prices[i]))
+        if len(highs) >= 2 and highs[-1][1] > highs[-2][1]:
+            zones.append(('HH', highs[-1][0]))
+        if len(lows) >= 2 and lows[-1][1] < lows[-2][1]:
+            zones.append(('LL', lows[-1][0]))
+    return zones
 
-def plot_chart(symbol, data, bos):
+def detect_fvg(data):
+    gaps = []
+    for i in range(2, len(data)):
+        prev_high = data['High'].iloc[i-2]
+        prev_low = data['Low'].iloc[i-2]
+        cur_low = data['Low'].iloc[i]
+        if cur_low > prev_high:
+            gaps.append((i, 'FVG'))
+    return gaps
+
+def plot_chart(symbol, data, events):
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(data['Close'].values, label='Цена')
-    for idx, label in bos[-3:]:
+    for label, idx in events[-3:]:
         ax.axvline(x=idx, color='red' if label == 'HH' else 'blue', linestyle='--')
         ax.text(idx, data['Close'].values[idx], label, color='black')
-    ax.set_title(f'{symbol} + BOS')
+    ax.set_title(f'{symbol} + Zones')
     plt.tight_layout()
-    image_path = f'bos_{symbol.replace("=","")}.png'
-    plt.savefig(image_path)
+    path = f'zones_{symbol.replace("=", "")}.png'
+    plt.savefig(path)
     plt.close()
-    return image_path
+    return path
 
 async def analyze_pair(symbol, interval, days):
     logging.info(f'Анализ {symbol} на таймфрейме {interval}')
@@ -124,6 +133,7 @@ async def analyze_pair(symbol, interval, days):
         return
 
     X, y = preprocess_data(data)
+
     if os.path.exists(MODEL_FILENAME):
         model = load_model(MODEL_FILENAME)
     else:
@@ -134,12 +144,14 @@ async def analyze_pair(symbol, interval, days):
     prediction = model.predict(X[-1:])[0][0]
     confidence = float(prediction)
     direction = "🔼 Покупка" if prediction > 0.5 else "🔽 Продажа"
-    bos_events = detect_bos(data['Close'].values)
+
+    events = detect_smart_zones(data['Close'].values)
+    fvg = detect_fvg(data)
 
     caption = f"📊 {symbol} {interval}\nСигнал: {direction}\nУверенность: {confidence:.2%}"
-    if bos_events:
-        chart_path = plot_chart(symbol, data, bos_events)
-        await send_telegram_photo(chart_path, caption)
+    if events or fvg:
+        image_path = plot_chart(symbol, data, events + fvg)
+        await send_telegram_photo(image_path, caption)
     elif confidence > CONFIDENCE_THRESHOLD:
         await send_telegram_message(caption)
 

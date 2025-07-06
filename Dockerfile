@@ -12,7 +12,6 @@ RUN apt-get update && \
         libxext6 \
         libxrender1 \
     && rm -rf /var/lib/apt/lists/* && \
-    pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 COPY . .
