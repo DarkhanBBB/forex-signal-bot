@@ -1,234 +1,117 @@
-import os
 import asyncio
+import datetime
 import logging
+import os
+import traceback
+
 import numpy as np
 import pandas as pd
-import yfinance as yf
-import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
-from collections import deque
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import Dense
-from ta.momentum import RSIIndicator
-from ta.volatility import AverageTrueRange
-from ta.volume import OnBalanceVolumeIndicator
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+import tensorflow as tf
+yf = __import__('yfinance')
+
 from telegram import Bot
-from telegram.constants import ParseMode
 
-# === Конфигурация ===
-MODEL_FILENAME = 'forex_model.h5'
-LOG_FILENAME = 'log.txt'
-SCOPES = ['https://www.googleapis.com/auth/drive']
-DRIVE_FOLDER_ID = '12GYefwcJwyo4mI4-MwdZzeLZrCAD1I09'
-TIMEFRAMES = {'15m': 7, '30m': 14, '1h': 30, '4h': 60}
-CONFIDENCE_THRESHOLD = 0.8
+from model_utils import load_model, save_model, train_model, create_model
+from trading_utils import detect_bos, detect_fvg, detect_order_blocks, calculate_tp_sl
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logger = logging.getLogger()
+
+# Настройки
 SYMBOLS = ['EURUSD=X', 'XAUUSD=X']
+TIMEFRAMES = ['15m', '30m', '1h', '4h']
+MODEL_PATH = 'model.h5'
+TOKEN = os.environ.get("BOT_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
 
-# === Переменные окружения ===
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+bot = Bot(token=TOKEN)
 
-# === Telegram бот ===
-bot = Bot(token=TELEGRAM_TOKEN)
+def send_telegram_message(message):
+    try:
+        bot.send_message(chat_id=CHAT_ID, text=message)
+    except Exception as e:
+        logger.error(f"Ошибка отправки в Telegram: {e}")
 
-# === Авторизация Google Drive ===
-credentials = service_account.Credentials.from_service_account_file(
-    'credentials.json', scopes=SCOPES)
-drive_service = build('drive', 'v3', credentials=credentials)
-
-# === Логирование ===
-logging.basicConfig(filename=LOG_FILENAME, level=logging.INFO, format='%(asctime)s - %(message)s')
-
-async def send_telegram_message(text):
-    if TELEGRAM_TOKEN and CHAT_ID:
-        await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode=ParseMode.HTML)
-
-async def send_telegram_photo(photo_path, caption):
-    if TELEGRAM_TOKEN and CHAT_ID:
-        with open(photo_path, 'rb') as photo:
-            await bot.send_photo(chat_id=CHAT_ID, photo=photo, caption=caption)
-
-def upload_to_drive(filename):
-    file_metadata = {'name': filename, 'parents': [DRIVE_FOLDER_ID]}
-    media = MediaFileUpload(filename, resumable=True)
-    drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-
-def download_model():
-    query = f"'{DRIVE_FOLDER_ID}' in parents and name='{MODEL_FILENAME}'"
-    results = drive_service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
-    items = results.get('files', [])
-    if not items:
-        return False
-    request = drive_service.files().get_media(fileId=items[0]['id'])
-    with open(MODEL_FILENAME, 'wb') as f:
-        f.write(request.execute())
-    return True
-
-def preprocess_data(data):
-    data = data.dropna()
-
-    close = data['Close']  # <-- оставляем Series
-
-    rsi = RSIIndicator(close=close).rsi()
-    atr = AverageTrueRange(high=data['High'], low=data['Low'], close=close).average_true_range()
-    obv = OnBalanceVolumeIndicator(close=close, volume=data['Volume']).on_balance_volume()
-
-    data['rsi'] = rsi
-    data['atr'] = atr
-    data['obv'] = obv
-
-    data.dropna(inplace=True)
-
-    X = data[['Close', 'rsi', 'atr', 'obv']]
-    y = (data['Close'].shift(-1) > data['Close']).astype(int)
-
-    X = X.iloc[:-1].to_numpy()
-    y = y.iloc[:-1].to_numpy()
-
+def prepare_data(data):
+    df = data.copy()
+    df = df.dropna()
+    df['Return'] = df['Close'].pct_change()
+    df['Target'] = (df['Return'].shift(-1) > 0).astype(int)
+    df = df.dropna()
+    X = df[['Open', 'High', 'Low', 'Close', 'Volume']].values
+    y = df['Target'].values
     return X, y
 
-def train_model(X, y):
-    model = Sequential()
-    model.add(Dense(64, activation='relu', input_shape=(X.shape[1],)))
-    model.add(Dense(32, activation='relu'))
-    model.add(Dense(1, activation='sigmoid'))
-    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-    model.fit(X, y, epochs=5, batch_size=32, verbose=0)
-    return model
+def analyze_symbol(symbol, interval):
+    try:
+        logger.info(f"Анализ {symbol} на таймфрейме {interval}")
+        send_telegram_message(f"Анализ {symbol} на таймфрейме {interval}")
 
-def detect_bos(prices):
-    highs, lows, bos = deque(maxlen=20), deque(maxlen=20), []
-    for i in range(1, len(prices)):
-        if prices[i] > prices[i - 1]:
-            highs.append(prices[i])
-        elif prices[i] < prices[i - 1]:
-            lows.append(prices[i])
-        if len(highs) >= 2 and highs[-1] > highs[-2]:
-            bos.append((i, 'HH'))
-        if len(lows) >= 2 and lows[-1] < lows[-2]:
-            bos.append((i, 'LL'))
-    return bos
+        end = datetime.datetime.utcnow()
+        start = end - datetime.timedelta(days=30)
 
-def detect_fvg(data):
-    gaps = []
-    for i in range(2, len(data)):
-        if data['Low'].iloc[i] > data['High'].iloc[i - 2]:
-            gaps.append((i, 'Bullish FVG'))
-        elif data['High'].iloc[i] < data['Low'].iloc[i - 2]:
-            gaps.append((i, 'Bearish FVG'))
-    return gaps
+        data = yf.download(symbol, start=start.strftime('%Y-%m-%d'), end=end.strftime('%Y-%m-%d'), interval=interval)
+        if data is None or data.empty:
+            raise ValueError("Нет данных")
 
-def detect_order_blocks(data):
-    blocks = []
-    for i in range(2, len(data)):
-        if data['Close'].iloc[i - 1] < data['Open'].iloc[i - 1] and data['Close'].iloc[i] > data['Open'].iloc[i]:
-            blocks.append((i - 1, 'Bullish OB'))
-        elif data['Close'].iloc[i - 1] > data['Open'].iloc[i - 1] and data['Close'].iloc[i] < data['Open'].iloc[i]:
-            blocks.append((i - 1, 'Bearish OB'))
-    return blocks
+        data = data[~data.index.duplicated(keep='first')]
 
-def plot_chart(symbol, data, bos, fvg, ob, sl=None, tp=None):
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(data['Close'].values, label='Цена')
+        # Smart Money элементы анализа
+        bos_events = detect_bos(data['Close'])
+        fvg_zones = detect_fvg(data)
+        order_blocks = detect_order_blocks(data)
 
-    for idx, label in bos[-3:]:
-        ax.axvline(x=idx, color='red' if label == 'HH' else 'blue', linestyle='--')
-        ax.text(idx, data['Close'].values[idx], label, color='black')
+        X, y = prepare_data(data)
+        if X.shape[0] < 50:
+            raise ValueError("Недостаточно данных для анализа")
 
-    for idx, label in fvg[-3:]:
-        ax.axvline(x=idx, color='green', linestyle=':')
-        ax.text(idx, data['Close'].values[idx], label, color='green')
+        model = load_model(MODEL_PATH)
+        if model is None:
+            model = create_model(X.shape[1])
 
-    for idx, label in ob[-3:]:
-        ax.axvline(x=idx, color='purple', linestyle='-.')
-        ax.text(idx, data['Close'].values[idx], label, color='purple')
+        model = train_model(model, X, y)
+        save_model(model, MODEL_PATH)
 
-    if sl:
-        ax.axhline(y=sl, color='orange', linestyle='--')
-        ax.text(len(data) - 1, sl, 'SL', color='orange', ha='right')
-    if tp:
-        ax.axhline(y=tp, color='green', linestyle='--')
-        ax.text(len(data) - 1, tp, 'TP', color='green', ha='right')
+        prediction = model.predict(X[-1].reshape(1, -1))[0][0]
+        confidence = round(float(prediction) * 100, 2)
 
-    ax.set_title(f'{symbol} + Smart Money Concepts')
-    plt.tight_layout()
-    image_path = f'smc_{symbol.replace("=","")}.png'
-    plt.savefig(image_path)
-    plt.close()
-    return image_path
+        if confidence > 80:
+            direction = "BUY" if prediction > 0.5 else "SELL"
+            entry = data['Close'].iloc[-1]
+            tp, sl = calculate_tp_sl(entry, direction)
+            message = (
+                f"\u2705 Сигнал для {symbol} ({interval}): {direction}\n"
+                f"Уверенность: {confidence}%\n"
+                f"TP: {tp:.5f} | SL: {sl:.5f}\n"
+                f"Break of Structure: {len(bos_events)}\n"
+                f"Order Blocks: {len(order_blocks)} | FVG: {len(fvg_zones)}"
+            )
+            logger.info(message)
+            send_telegram_message(message)
 
-async def analyze_pair(symbol, interval, days):
-    logging.info(f'Анализ {symbol} на таймфрейме {interval}')
-    end = datetime.utcnow()
-    start = end - timedelta(days=days)
-    data = yf.download(symbol, start=start.strftime('%Y-%m-%d'), end=end.strftime('%Y-%m-%d'), interval=interval)
-
-    if data.empty or len(data) < 50:
-        await send_telegram_message(f"⚠️ Недостаточно данных по {symbol} {interval}")
-        return
-
-    X, y = preprocess_data(data)
-    if os.path.exists(MODEL_FILENAME):
-        model = load_model(MODEL_FILENAME)
-    else:
-        model = train_model(X, y)
-        model.save(MODEL_FILENAME)
-        upload_to_drive(MODEL_FILENAME)
-
-    prediction = model.predict(X[-1:])[0][0]
-    confidence = float(prediction)
-    direction = "🔼 Покупка" if prediction > 0.5 else "🔽 Продажа"
-
-    atr = data['High'].rolling(window=14).max() - data['Low'].rolling(window=14).min()
-    atr_value = atr.iloc[-1] if not atr.isna().all() else 0
-    price = data['Close'].iloc[-1]
-    sl = price - atr_value if prediction > 0.5 else price + atr_value
-    tp = price + 2 * atr_value if prediction > 0.5 else price - 2 * atr_value
-
-    bos_events = detect_bos(data['Close'])  # исправлено
-    fvg_zones = detect_fvg(data)
-    order_blocks = detect_order_blocks(data)
-
-    caption = (
-        f"📊 {symbol} {interval}\n"
-        f"Сигнал: {direction}\n"
-        f"Уверенность: {confidence:.2%}\n"
-        f"<b>TP</b>: {tp:.5f}\n"
-        f"<b>SL</b>: {sl:.5f}"
-    )
-
-    if confidence > CONFIDENCE_THRESHOLD:
-        chart_path = plot_chart(symbol, data, bos_events, fvg_zones, order_blocks, sl, tp)
-        await send_telegram_photo(chart_path, caption)
-
-    model.fit(X, y, epochs=3, batch_size=32, verbose=0)
-    model.save(MODEL_FILENAME)
-    upload_to_drive(MODEL_FILENAME)
-
-def upload_log():
-    if os.path.exists(LOG_FILENAME):
-        upload_to_drive(LOG_FILENAME)
+    except Exception as e:
+        error_text = f"\u274C Ошибка при анализе {symbol} {interval}: {e}"
+        logger.error(error_text)
+        send_telegram_message(error_text)
+        traceback.print_exc()
 
 async def main():
-    if not download_model():
-        await send_telegram_message("⚠️ Модель не найдена на Google Drive. Создана новая.")
-
-    await send_telegram_message("🤖 Бот успешно запущен и работает!")
-
+    first_run = True
     while True:
-        for tf, days in TIMEFRAMES.items():
+        if first_run:
+            send_telegram_message("\ud83e\udd16 Бот запущен и работает")
+            first_run = False
+
+        for interval in TIMEFRAMES:
             for symbol in SYMBOLS:
-                try:
-                    await analyze_pair(symbol, tf, days)
-                except Exception as e:
-                    msg = f"❌ Ошибка при анализе {symbol} {tf}: {str(e)}"
-                    logging.error(msg)
-                    await send_telegram_message(msg)
-        upload_log()
-        await asyncio.sleep(1800)
+                await asyncio.to_thread(analyze_symbol, symbol, interval)
+
+        try:
+            await asyncio.sleep(1800)  # 30 минут
+        except asyncio.CancelledError:
+            logger.warning("Цикл прерван")
+            break
 
 if __name__ == '__main__':
     asyncio.run(main())
