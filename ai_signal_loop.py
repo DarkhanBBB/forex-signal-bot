@@ -10,6 +10,7 @@ from collections import deque
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Dense
 from ta.momentum import RSIIndicator
+from ta.volatility import AverageTrueRange
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -69,9 +70,11 @@ def preprocess_data(data):
     data = data.dropna()
     close = data['Close'].values.flatten()
     rsi = RSIIndicator(close=close).rsi()
+    atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close']).average_true_range()
     data['rsi'] = rsi
+    data['atr'] = atr
     data.dropna(inplace=True)
-    X = data[['Close', 'rsi']].values
+    X = data[['Close', 'rsi', 'atr']].values
     y = (data['Close'].shift(-1) > data['Close']).astype(int).dropna().values
     X = X[:-1]
     return np.array(X), np.array(y)
@@ -98,31 +101,40 @@ def detect_bos(prices):
             bos.append((i, 'LL'))
     return bos
 
-def detect_fvg(data):
-    fvg_list = []
+def detect_order_blocks(data):
+    result = []
     for i in range(2, len(data)):
-        if data['Low'].iloc[i - 1] > data['High'].iloc[i - 2]:
-            fvg_list.append((i - 2, i - 1, 'bullish'))
-        elif data['High'].iloc[i - 1] < data['Low'].iloc[i - 2]:
-            fvg_list.append((i - 2, i - 1, 'bearish'))
-    return fvg_list
+        if data['Close'][i] > data['Open'][i] and data['Close'][i-1] < data['Open'][i-1]:
+            result.append((i-1, 'Bullish OB'))
+        elif data['Close'][i] < data['Open'][i] and data['Close'][i-1] > data['Open'][i-1]:
+            result.append((i-1, 'Bearish OB'))
+    return result[-3:]
 
-def plot_fvg_on_chart(ax, fvg_list):
-    for start, end, fvg_type in fvg_list:
-        color = 'green' if fvg_type == 'bullish' else 'red'
-        ax.axvspan(start, end, color=color, alpha=0.3)
+def detect_liquidity_zones(data):
+    zones = []
+    highs = data['High'].rolling(window=10).max()
+    lows = data['Low'].rolling(window=10).min()
+    zones.append(('Liquidity High', highs.idxmax()))
+    zones.append(('Liquidity Low', lows.idxmin()))
+    return zones
 
-def plot_chart(symbol, data, bos, fvg=None):
+def plot_chart(symbol, data, bos, ob=None, lq=None):
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(data['Close'].values, label='Цена')
-    for idx, label in bos[-3:]:
+    for idx, label in bos:
         ax.axvline(x=idx, color='red' if label == 'HH' else 'blue', linestyle='--')
         ax.text(idx, data['Close'].values[idx], label, color='black')
-    if fvg:
-        plot_fvg_on_chart(ax, fvg)
-    ax.set_title(f'{symbol} + BOS + FVG')
+    if ob:
+        for idx, label in ob:
+            ax.axvline(x=idx, color='orange', linestyle=':')
+            ax.text(idx, data['Close'].values[idx], label, color='orange')
+    if lq:
+        for label, idx in lq:
+            ax.axvline(x=idx, color='purple', linestyle='-.')
+            ax.text(idx, data['Close'].values[idx], label, color='purple')
+    ax.set_title(f'{symbol} + Smart Money Concepts')
     plt.tight_layout()
-    image_path = f'bos_{symbol.replace("=","")}.png'
+    image_path = f'smc_{symbol.replace("=","")}.png'
     plt.savefig(image_path)
     plt.close()
     return image_path
@@ -148,12 +160,14 @@ async def analyze_pair(symbol, interval, days):
     prediction = model.predict(X[-1:])[0][0]
     confidence = float(prediction)
     direction = "🔼 Покупка" if prediction > 0.5 else "🔽 Продажа"
+
     bos_events = detect_bos(data['Close'].values)
-    fvg_events = detect_fvg(data)
+    ob_blocks = detect_order_blocks(data)
+    liquidity = detect_liquidity_zones(data)
 
     caption = f"📊 {symbol} {interval}\nСигнал: {direction}\nУверенность: {confidence:.2%}"
-    if bos_events or fvg_events:
-        chart_path = plot_chart(symbol, data, bos_events, fvg_events)
+    if bos_events:
+        chart_path = plot_chart(symbol, data, bos_events, ob_blocks, liquidity)
         await send_telegram_photo(chart_path, caption)
     elif confidence > CONFIDENCE_THRESHOLD:
         await send_telegram_message(caption)
@@ -169,7 +183,6 @@ def upload_log():
 async def main():
     if not download_model():
         await send_telegram_message("⚠️ Модель не найдена на Google Drive. Создана новая.")
-
     await send_telegram_message("🤖 Бот успешно запущен и работает!")
 
     while True:
