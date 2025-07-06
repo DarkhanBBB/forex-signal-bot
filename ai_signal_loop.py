@@ -70,11 +70,8 @@ def download_model():
 def preprocess_data(data):
     data = data.dropna()
 
-    # Преобразование close в одномерный массив
-    close = data['Close'].values
-    if close.ndim > 1:
-        close = close.flatten()
-
+    # Используем Series, а не ndarray
+    close = data['Close']
     rsi = RSIIndicator(close=close).rsi()
     atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close']).average_true_range()
     obv = OnBalanceVolumeIndicator(close=data['Close'], volume=data['Volume']).on_balance_volume()
@@ -84,11 +81,9 @@ def preprocess_data(data):
     data['obv'] = obv
     data.dropna(inplace=True)
 
-    # Обучающая выборка X и целевая переменная y
     X = data[['Close', 'rsi', 'atr', 'obv']].values
     y = (data['Close'].shift(-1) > data['Close']).astype(int).dropna().values
-
-    X = X[:-1]  # Удаляем последнюю строку из X, чтобы совпадала с y
+    X = X[:-1]
 
     return np.array(X), np.array(y)
 
@@ -102,9 +97,6 @@ def train_model(X, y):
     return model
 
 def detect_bos(prices):
-    if isinstance(prices, np.ndarray):
-        prices = pd.Series(prices.flatten())
-
     highs, lows, bos = deque(maxlen=20), deque(maxlen=20), []
     for i in range(1, len(prices)):
         if prices[i] > prices[i - 1]:
@@ -120,18 +112,18 @@ def detect_bos(prices):
 def detect_fvg(data):
     gaps = []
     for i in range(2, len(data)):
-        if data['Low'][i] > data['High'][i - 2]:
+        if data['Low'].iloc[i] > data['High'].iloc[i - 2]:
             gaps.append((i, 'Bullish FVG'))
-        elif data['High'][i] < data['Low'][i - 2]:
+        elif data['High'].iloc[i] < data['Low'].iloc[i - 2]:
             gaps.append((i, 'Bearish FVG'))
     return gaps
 
 def detect_order_blocks(data):
     blocks = []
     for i in range(2, len(data)):
-        if data['Close'][i - 1] < data['Open'][i - 1] and data['Close'][i] > data['Open'][i]:
+        if data['Close'].iloc[i - 1] < data['Open'].iloc[i - 1] and data['Close'].iloc[i] > data['Open'].iloc[i]:
             blocks.append((i - 1, 'Bullish OB'))
-        elif data['Close'][i - 1] > data['Open'][i - 1] and data['Close'][i] < data['Open'][i]:
+        elif data['Close'].iloc[i - 1] > data['Open'].iloc[i - 1] and data['Close'].iloc[i] < data['Open'].iloc[i]:
             blocks.append((i - 1, 'Bearish OB'))
     return blocks
 
@@ -193,7 +185,7 @@ async def analyze_pair(symbol, interval, days):
     sl = price - atr_value if prediction > 0.5 else price + atr_value
     tp = price + 2 * atr_value if prediction > 0.5 else price - 2 * atr_value
 
-    bos_events = detect_bos(data['Close'])  # передаём Series, а не ndarray
+    bos_events = detect_bos(data['Close'])  # <-- важно!
     fvg_zones = detect_fvg(data)
     order_blocks = detect_order_blocks(data)
 
