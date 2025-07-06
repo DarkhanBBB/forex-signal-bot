@@ -69,7 +69,7 @@ def download_model():
 
 def preprocess_data(data):
     data = data.dropna()
-    close = data['Close'].values.flatten()
+    close = data['Close']
     rsi = RSIIndicator(close=close).rsi()
     atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close']).average_true_range()
     obv = OnBalanceVolumeIndicator(close=data['Close'], volume=data['Volume']).on_balance_volume()
@@ -95,6 +95,9 @@ def train_model(X, y):
     return model
 
 def detect_bos(prices):
+    if isinstance(prices, np.ndarray):
+        prices = pd.Series(prices.flatten())
+
     highs, lows, bos = deque(maxlen=20), deque(maxlen=20), []
     for i in range(1, len(prices)):
         if prices[i] > prices[i - 1]:
