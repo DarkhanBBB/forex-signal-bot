@@ -69,7 +69,12 @@ def download_model():
 
 def preprocess_data(data):
     data = data.dropna()
-    close = data['Close']
+
+    # Преобразование close в одномерный массив
+    close = data['Close'].values
+    if close.ndim > 1:
+        close = close.flatten()
+
     rsi = RSIIndicator(close=close).rsi()
     atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close']).average_true_range()
     obv = OnBalanceVolumeIndicator(close=data['Close'], volume=data['Volume']).on_balance_volume()
@@ -79,9 +84,11 @@ def preprocess_data(data):
     data['obv'] = obv
     data.dropna(inplace=True)
 
+    # Обучающая выборка X и целевая переменная y
     X = data[['Close', 'rsi', 'atr', 'obv']].values
     y = (data['Close'].shift(-1) > data['Close']).astype(int).dropna().values
-    X = X[:-1]
+
+    X = X[:-1]  # Удаляем последнюю строку из X, чтобы совпадала с y
 
     return np.array(X), np.array(y)
 
