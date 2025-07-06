@@ -7,12 +7,12 @@ import traceback
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-yf = __import__('yfinance')
-
+import yfinance as yf
 from telegram import Bot
 
 from model_utils import load_model, save_model, train_model, create_model
-from trading_utils import detect_bos, detect_fvg, detect_order_blocks, calculate_tp_sl
+from trading_utils import detect_bos, detect_fvg, detect_order_blocks
+from data_utils import load_data_history, save_data_history, append_new_data, get_combined_data
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -27,21 +27,31 @@ CHAT_ID = os.environ.get("CHAT_ID")
 
 bot = Bot(token=TOKEN)
 
+
 def send_telegram_message(message):
     try:
         bot.send_message(chat_id=CHAT_ID, text=message)
     except Exception as e:
         logger.error(f"Ошибка отправки в Telegram: {e}")
 
+
 def prepare_data(data):
     df = data.copy()
     df = df.dropna()
     df['Return'] = df['Close'].pct_change()
     df['Target'] = (df['Return'].shift(-1) > 0).astype(int)
+
+    # Добавляем индикаторы Smart Money
+    df['BOS'] = detect_bos(df['Close'])
+    df['FVG'] = detect_fvg(df)
+    df['OB'] = detect_order_blocks(df)
+
     df = df.dropna()
-    X = df[['Open', 'High', 'Low', 'Close', 'Volume']].values
+    features = ['Open', 'High', 'Low', 'Close', 'Volume', 'BOS', 'FVG', 'OB']
+    X = df[features].values
     y = df['Target'].values
     return X, y
+
 
 def analyze_symbol(symbol, interval):
     try:
@@ -50,19 +60,20 @@ def analyze_symbol(symbol, interval):
 
         end = datetime.datetime.utcnow()
         start = end - datetime.timedelta(days=30)
+        new_data = yf.download(symbol, start=start.strftime('%Y-%m-%d'), end=end.strftime('%Y-%m-%d'), interval=interval)
 
-        data = yf.download(symbol, start=start.strftime('%Y-%m-%d'), end=end.strftime('%Y-%m-%d'), interval=interval)
-        if data is None or data.empty:
+        if new_data is None or new_data.empty:
             raise ValueError("Нет данных")
 
-        data = data[~data.index.duplicated(keep='first')]
+        new_data = new_data[~new_data.index.duplicated(keep='first')]
 
-        # Smart Money элементы анализа
-        bos_events = detect_bos(data['Close'])
-        fvg_zones = detect_fvg(data)
-        order_blocks = detect_order_blocks(data)
+        # Обновляем историю
+        history_df = load_data_history(symbol, interval)
+        updated_df = append_new_data(history_df, new_data)
+        save_data_history(symbol, interval, updated_df)
 
-        X, y = prepare_data(data)
+        X, y = get_combined_data(symbol, interval)
+
         if X.shape[0] < 50:
             raise ValueError("Недостаточно данных для анализа")
 
@@ -78,29 +89,22 @@ def analyze_symbol(symbol, interval):
 
         if confidence > 80:
             direction = "BUY" if prediction > 0.5 else "SELL"
-            entry = data['Close'].iloc[-1]
-            tp, sl = calculate_tp_sl(entry, direction)
-            message = (
-                f"\u2705 Сигнал для {symbol} ({interval}): {direction}\n"
-                f"Уверенность: {confidence}%\n"
-                f"TP: {tp:.5f} | SL: {sl:.5f}\n"
-                f"Break of Structure: {len(bos_events)}\n"
-                f"Order Blocks: {len(order_blocks)} | FVG: {len(fvg_zones)}"
-            )
+            message = f"✅ Сигнал для {symbol} ({interval}): {direction}\nУверенность: {confidence}%"
             logger.info(message)
             send_telegram_message(message)
 
     except Exception as e:
-        error_text = f"\u274C Ошибка при анализе {symbol} {interval}: {e}"
+        error_text = f"❌ Ошибка при анализе {symbol} {interval}: {e}"
         logger.error(error_text)
         send_telegram_message(error_text)
         traceback.print_exc()
+
 
 async def main():
     first_run = True
     while True:
         if first_run:
-            send_telegram_message("\ud83e\udd16 Бот запущен и работает")
+            send_telegram_message("🤖 Бот запущен и работает")
             first_run = False
 
         for interval in TIMEFRAMES:
@@ -108,10 +112,11 @@ async def main():
                 await asyncio.to_thread(analyze_symbol, symbol, interval)
 
         try:
-            await asyncio.sleep(1800)  # 30 минут
+            await asyncio.sleep(1800)
         except asyncio.CancelledError:
             logger.warning("Цикл прерван")
             break
+
 
 if __name__ == '__main__':
     asyncio.run(main())
