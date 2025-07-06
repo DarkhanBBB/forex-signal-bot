@@ -18,7 +18,7 @@ from googleapiclient.http import MediaFileUpload
 from telegram import Bot
 from telegram.constants import ParseMode
 
-# === Конфигурация ===
+# === Config ===
 MODEL_FILENAME = 'forex_model.h5'
 LOG_FILENAME = 'log.txt'
 SCOPES = ['https://www.googleapis.com/auth/drive']
@@ -27,19 +27,18 @@ TIMEFRAMES = {'15m': 7, '30m': 14, '1h': 30, '4h': 60}
 CONFIDENCE_THRESHOLD = 0.8
 SYMBOLS = ['EURUSD=X', 'XAUUSD=X']
 
-# === Переменные окружения ===
+# === Env ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# === Telegram бот ===
+# === Telegram bot ===
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# === Авторизация Google Drive ===
-credentials = service_account.Credentials.from_service_account_file(
-    'credentials.json', scopes=SCOPES)
+# === Google Drive ===
+credentials = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
 drive_service = build('drive', 'v3', credentials=credentials)
 
-# === Логирование ===
+# === Logging ===
 logging.basicConfig(filename=LOG_FILENAME, level=logging.INFO, format='%(asctime)s - %(message)s')
 
 async def send_telegram_message(text):
@@ -69,9 +68,7 @@ def download_model():
 
 def preprocess_data(data):
     data = data.dropna()
-
-    # Используем Series, а не ndarray
-    close = data['Close']
+    close = data['Close'].values.flatten()
     rsi = RSIIndicator(close=close).rsi()
     atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close']).average_true_range()
     obv = OnBalanceVolumeIndicator(close=data['Close'], volume=data['Volume']).on_balance_volume()
