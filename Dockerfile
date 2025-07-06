@@ -17,11 +17,10 @@ RUN apt-get update && \
         zlib1g-dev \
         libffi-dev \
         libssl-dev \
-        git && \
-    pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+        git \
+    && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 

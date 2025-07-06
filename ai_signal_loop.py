@@ -11,6 +11,7 @@ from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Dense
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
+from ta.volume import OnBalanceVolumeIndicator
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -71,12 +72,17 @@ def preprocess_data(data):
     close = data['Close'].values.flatten()
     rsi = RSIIndicator(close=close).rsi()
     atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close']).average_true_range()
+    obv = OnBalanceVolumeIndicator(close=data['Close'], volume=data['Volume']).on_balance_volume()
+
     data['rsi'] = rsi
     data['atr'] = atr
+    data['obv'] = obv
     data.dropna(inplace=True)
-    X = data[['Close', 'rsi', 'atr']].values
+
+    X = data[['Close', 'rsi', 'atr', 'obv']].values
     y = (data['Close'].shift(-1) > data['Close']).astype(int).dropna().values
     X = X[:-1]
+
     return np.array(X), np.array(y)
 
 def train_model(X, y):
@@ -101,37 +107,40 @@ def detect_bos(prices):
             bos.append((i, 'LL'))
     return bos
 
-def detect_order_blocks(data):
-    result = []
+def detect_fvg(data):
+    gaps = []
     for i in range(2, len(data)):
-        if data['Close'][i] > data['Open'][i] and data['Close'][i-1] < data['Open'][i-1]:
-            result.append((i-1, 'Bullish OB'))
-        elif data['Close'][i] < data['Open'][i] and data['Close'][i-1] > data['Open'][i-1]:
-            result.append((i-1, 'Bearish OB'))
-    return result[-3:]
+        if data['Low'][i] > data['High'][i - 2]:
+            gaps.append((i, 'Bullish FVG'))
+        elif data['High'][i] < data['Low'][i - 2]:
+            gaps.append((i, 'Bearish FVG'))
+    return gaps
 
-def detect_liquidity_zones(data):
-    zones = []
-    highs = data['High'].rolling(window=10).max()
-    lows = data['Low'].rolling(window=10).min()
-    zones.append(('Liquidity High', highs.idxmax()))
-    zones.append(('Liquidity Low', lows.idxmin()))
-    return zones
+def detect_order_blocks(data):
+    blocks = []
+    for i in range(2, len(data)):
+        if data['Close'][i - 1] < data['Open'][i - 1] and data['Close'][i] > data['Open'][i]:
+            blocks.append((i - 1, 'Bullish OB'))
+        elif data['Close'][i - 1] > data['Open'][i - 1] and data['Close'][i] < data['Open'][i]:
+            blocks.append((i - 1, 'Bearish OB'))
+    return blocks
 
-def plot_chart(symbol, data, bos, ob=None, lq=None):
-    fig, ax = plt.subplots(figsize=(10, 5))
+def plot_chart(symbol, data, bos, fvg, ob):
+    fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(data['Close'].values, label='Цена')
-    for idx, label in bos:
+
+    for idx, label in bos[-3:]:
         ax.axvline(x=idx, color='red' if label == 'HH' else 'blue', linestyle='--')
         ax.text(idx, data['Close'].values[idx], label, color='black')
-    if ob:
-        for idx, label in ob:
-            ax.axvline(x=idx, color='orange', linestyle=':')
-            ax.text(idx, data['Close'].values[idx], label, color='orange')
-    if lq:
-        for label, idx in lq:
-            ax.axvline(x=idx, color='purple', linestyle='-.')
-            ax.text(idx, data['Close'].values[idx], label, color='purple')
+
+    for idx, label in fvg[-3:]:
+        ax.axvline(x=idx, color='green', linestyle=':')
+        ax.text(idx, data['Close'].values[idx], label, color='green')
+
+    for idx, label in ob[-3:]:
+        ax.axvline(x=idx, color='purple', linestyle='-.')
+        ax.text(idx, data['Close'].values[idx], label, color='purple')
+
     ax.set_title(f'{symbol} + Smart Money Concepts')
     plt.tight_layout()
     image_path = f'smc_{symbol.replace("=","")}.png'
@@ -160,17 +169,14 @@ async def analyze_pair(symbol, interval, days):
     prediction = model.predict(X[-1:])[0][0]
     confidence = float(prediction)
     direction = "🔼 Покупка" if prediction > 0.5 else "🔽 Продажа"
-
     bos_events = detect_bos(data['Close'].values)
-    ob_blocks = detect_order_blocks(data)
-    liquidity = detect_liquidity_zones(data)
+    fvg_zones = detect_fvg(data)
+    order_blocks = detect_order_blocks(data)
 
     caption = f"📊 {symbol} {interval}\nСигнал: {direction}\nУверенность: {confidence:.2%}"
-    if bos_events:
-        chart_path = plot_chart(symbol, data, bos_events, ob_blocks, liquidity)
+    if confidence > CONFIDENCE_THRESHOLD:
+        chart_path = plot_chart(symbol, data, bos_events, fvg_zones, order_blocks)
         await send_telegram_photo(chart_path, caption)
-    elif confidence > CONFIDENCE_THRESHOLD:
-        await send_telegram_message(caption)
 
     model.fit(X, y, epochs=3, batch_size=32, verbose=0)
     model.save(MODEL_FILENAME)
@@ -183,6 +189,7 @@ def upload_log():
 async def main():
     if not download_model():
         await send_telegram_message("⚠️ Модель не найдена на Google Drive. Создана новая.")
+
     await send_telegram_message("🤖 Бот успешно запущен и работает!")
 
     while True:
