@@ -69,8 +69,10 @@ def download_model():
 
 def preprocess_data(data):
     data = data.dropna()
-    close_series = data['Close']
-    rsi = RSIIndicator(close=close_series).rsi()
+
+    close = data['Close']  # <- Исправлено: оставляем Series
+
+    rsi = RSIIndicator(close=close).rsi()
     atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close']).average_true_range()
     obv = OnBalanceVolumeIndicator(close=data['Close'], volume=data['Volume']).on_balance_volume()
 
