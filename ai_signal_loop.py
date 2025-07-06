@@ -185,7 +185,7 @@ async def analyze_pair(symbol, interval, days):
     sl = price - atr_value if prediction > 0.5 else price + atr_value
     tp = price + 2 * atr_value if prediction > 0.5 else price - 2 * atr_value
 
-    bos_events = detect_bos(data['Close'])  # <-- важно!
+    bos_events = detect_bos(data['Close'].values.flatten())
     fvg_zones = detect_fvg(data)
     order_blocks = detect_order_blocks(data)
 
