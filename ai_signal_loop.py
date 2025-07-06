@@ -70,22 +70,25 @@ def download_model():
 def preprocess_data(data):
     data = data.dropna()
 
-    close = data['Close']  # <- Исправлено: оставляем Series
+    close = data['Close']  # <-- оставляем Series
 
     rsi = RSIIndicator(close=close).rsi()
-    atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close']).average_true_range()
-    obv = OnBalanceVolumeIndicator(close=data['Close'], volume=data['Volume']).on_balance_volume()
+    atr = AverageTrueRange(high=data['High'], low=data['Low'], close=close).average_true_range()
+    obv = OnBalanceVolumeIndicator(close=close, volume=data['Volume']).on_balance_volume()
 
     data['rsi'] = rsi
     data['atr'] = atr
     data['obv'] = obv
+
     data.dropna(inplace=True)
 
-    X = data[['Close', 'rsi', 'atr', 'obv']].values
-    y = (data['Close'].shift(-1) > data['Close']).astype(int).dropna().values
-    X = X[:-1]
+    X = data[['Close', 'rsi', 'atr', 'obv']]
+    y = (data['Close'].shift(-1) > data['Close']).astype(int)
 
-    return np.array(X), np.array(y)
+    X = X.iloc[:-1].to_numpy()
+    y = y.iloc[:-1].to_numpy()
+
+    return X, y
 
 def train_model(X, y):
     model = Sequential()
