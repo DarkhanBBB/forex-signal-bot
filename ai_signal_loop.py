@@ -125,7 +125,7 @@ def detect_order_blocks(data):
             blocks.append((i - 1, 'Bearish OB'))
     return blocks
 
-def plot_chart(symbol, data, bos, fvg, ob):
+def plot_chart(symbol, data, bos, fvg, ob, sl=None, tp=None):
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(data['Close'].values, label='Цена')
 
@@ -140,6 +140,13 @@ def plot_chart(symbol, data, bos, fvg, ob):
     for idx, label in ob[-3:]:
         ax.axvline(x=idx, color='purple', linestyle='-.')
         ax.text(idx, data['Close'].values[idx], label, color='purple')
+
+    if sl:
+        ax.axhline(y=sl, color='orange', linestyle='--')
+        ax.text(len(data) - 1, sl, 'SL', color='orange', ha='right')
+    if tp:
+        ax.axhline(y=tp, color='green', linestyle='--')
+        ax.text(len(data) - 1, tp, 'TP', color='green', ha='right')
 
     ax.set_title(f'{symbol} + Smart Money Concepts')
     plt.tight_layout()
@@ -169,13 +176,27 @@ async def analyze_pair(symbol, interval, days):
     prediction = model.predict(X[-1:])[0][0]
     confidence = float(prediction)
     direction = "🔼 Покупка" if prediction > 0.5 else "🔽 Продажа"
+
+    atr = data['High'].rolling(window=14).max() - data['Low'].rolling(window=14).min()
+    atr_value = atr.iloc[-1] if not atr.isna().all() else 0
+    price = data['Close'].values[-1]
+    sl = price - atr_value if prediction > 0.5 else price + atr_value
+    tp = price + 2 * atr_value if prediction > 0.5 else price - 2 * atr_value
+
     bos_events = detect_bos(data['Close'].values)
     fvg_zones = detect_fvg(data)
     order_blocks = detect_order_blocks(data)
 
-    caption = f"📊 {symbol} {interval}\nСигнал: {direction}\nУверенность: {confidence:.2%}"
+    caption = (
+        f"📊 {symbol} {interval}\n"
+        f"Сигнал: {direction}\n"
+        f"Уверенность: {confidence:.2%}\n"
+        f"<b>TP</b>: {tp:.5f}\n"
+        f"<b>SL</b>: {sl:.5f}"
+    )
+
     if confidence > CONFIDENCE_THRESHOLD:
-        chart_path = plot_chart(symbol, data, bos_events, fvg_zones, order_blocks)
+        chart_path = plot_chart(symbol, data, bos_events, fvg_zones, order_blocks, sl, tp)
         await send_telegram_photo(chart_path, caption)
 
     model.fit(X, y, epochs=3, batch_size=32, verbose=0)
