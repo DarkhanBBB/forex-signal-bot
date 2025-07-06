@@ -94,13 +94,13 @@ def train_model(X, y):
     model.fit(X, y, epochs=5, batch_size=32, verbose=0)
     return model
 
-def detect_bos(prices):
+def detect_bos(close: pd.Series):
     highs, lows, bos = deque(maxlen=20), deque(maxlen=20), []
-    for i in range(1, len(prices)):
-        if prices.iloc[i] > prices.iloc[i - 1]:
-            highs.append(prices.iloc[i])
-        elif prices.iloc[i] < prices.iloc[i - 1]:
-            lows.append(prices.iloc[i])
+    for i in range(1, len(close)):
+        if close[i] > close[i - 1]:
+            highs.append(close[i])
+        elif close[i] < close[i - 1]:
+            lows.append(close[i])
         if len(highs) >= 2 and highs[-1] > highs[-2]:
             bos.append((i, 'HH'))
         if len(lows) >= 2 and lows[-1] < lows[-2]:
@@ -183,7 +183,7 @@ async def analyze_pair(symbol, interval, days):
     sl = price - atr_value if prediction > 0.5 else price + atr_value
     tp = price + 2 * atr_value if prediction > 0.5 else price - 2 * atr_value
 
-    bos_events = detect_bos(data['Close'])
+    bos_events = detect_bos(data['Close'])  # это Series, а не ndarray
     fvg_zones = detect_fvg(data)
     order_blocks = detect_order_blocks(data)
 
