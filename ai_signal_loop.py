@@ -18,7 +18,7 @@ from googleapiclient.http import MediaFileUpload
 from telegram import Bot
 from telegram.constants import ParseMode
 
-# === Config ===
+# === Конфигурация ===
 MODEL_FILENAME = 'forex_model.h5'
 LOG_FILENAME = 'log.txt'
 SCOPES = ['https://www.googleapis.com/auth/drive']
@@ -27,18 +27,19 @@ TIMEFRAMES = {'15m': 7, '30m': 14, '1h': 30, '4h': 60}
 CONFIDENCE_THRESHOLD = 0.8
 SYMBOLS = ['EURUSD=X', 'XAUUSD=X']
 
-# === Env ===
+# === Переменные окружения ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# === Telegram bot ===
+# === Telegram бот ===
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# === Google Drive ===
-credentials = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
+# === Авторизация Google Drive ===
+credentials = service_account.Credentials.from_service_account_file(
+    'credentials.json', scopes=SCOPES)
 drive_service = build('drive', 'v3', credentials=credentials)
 
-# === Logging ===
+# === Логирование ===
 logging.basicConfig(filename=LOG_FILENAME, level=logging.INFO, format='%(asctime)s - %(message)s')
 
 async def send_telegram_message(text):
@@ -68,7 +69,7 @@ def download_model():
 
 def preprocess_data(data):
     data = data.dropna()
-    close = data['Close'].values.flatten()
+    close = data['Close']
     rsi = RSIIndicator(close=close).rsi()
     atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close']).average_true_range()
     obv = OnBalanceVolumeIndicator(close=data['Close'], volume=data['Volume']).on_balance_volume()
@@ -96,10 +97,10 @@ def train_model(X, y):
 def detect_bos(prices):
     highs, lows, bos = deque(maxlen=20), deque(maxlen=20), []
     for i in range(1, len(prices)):
-        if prices[i] > prices[i - 1]:
-            highs.append(prices[i])
-        elif prices[i] < prices[i - 1]:
-            lows.append(prices[i])
+        if prices.iloc[i] > prices.iloc[i - 1]:
+            highs.append(prices.iloc[i])
+        elif prices.iloc[i] < prices.iloc[i - 1]:
+            lows.append(prices.iloc[i])
         if len(highs) >= 2 and highs[-1] > highs[-2]:
             bos.append((i, 'HH'))
         if len(lows) >= 2 and lows[-1] < lows[-2]:
@@ -149,7 +150,7 @@ def plot_chart(symbol, data, bos, fvg, ob, sl=None, tp=None):
 
     ax.set_title(f'{symbol} + Smart Money Concepts')
     plt.tight_layout()
-    image_path = f'smc_{symbol.replace("=","")}.png'
+    image_path = f'smc_{symbol.replace("=", "")}.png'
     plt.savefig(image_path)
     plt.close()
     return image_path
