@@ -14,6 +14,12 @@ RUN apt-get update && \
         libsm6 \
         libxext6 \
         libxrender1 \
+        libatlas-base-dev \
+        libjpeg-dev \
+        zlib1g-dev \
+        libffi-dev \
+        libssl-dev \
+        git \
     && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
