@@ -1,0 +1,45 @@
+FROM python:3.10-bullseye
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        libatlas-base-dev \
+        libjpeg-dev \
+        zlib1g-dev \
+        libffi-dev \
+        libssl-dev \
+        git
+
+# 👇 ДОБАВЬ ЭТУ СТРОКУ для ручной установки пакетов
+RUN pip install --no-cache-dir --upgrade pip
+
+# 👇 Пошаговая установка для отладки
+RUN pip install --no-cache-dir tensorflow==2.12.0
+RUN pip install --no-cache-dir numpy==1.23.5
+RUN pip install --no-cache-dir pandas==1.5.3
+RUN pip install --no-cache-dir yfinance==0.2.18
+RUN pip install --no-cache-dir matplotlib==3.7.1
+RUN pip install --no-cache-dir ta==0.10.2
+RUN pip install --no-cache-dir scikit-learn==1.2.2
+RUN pip install --no-cache-dir python-telegram-bot==20.3
+RUN pip install --no-cache-dir google-api-python-client==2.97.0
+RUN pip install --no-cache-dir google-auth==2.25.2
+RUN pip install --no-cache-dir google-auth-oauthlib==1.2.0
+RUN pip install --no-cache-dir google-auth-httplib2==0.2.0
+
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY . .
+
+CMD ["python", "ai_signal_loop.py"]
