@@ -69,8 +69,8 @@ def download_model():
 
 def preprocess_data(data):
     data = data.dropna()
-    close = data['Close']
-    rsi = RSIIndicator(close=close).rsi()
+    close_series = data['Close']
+    rsi = RSIIndicator(close=close_series).rsi()
     atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close']).average_true_range()
     obv = OnBalanceVolumeIndicator(close=data['Close'], volume=data['Volume']).on_balance_volume()
 
@@ -94,13 +94,13 @@ def train_model(X, y):
     model.fit(X, y, epochs=5, batch_size=32, verbose=0)
     return model
 
-def detect_bos(close: pd.Series):
+def detect_bos(prices):
     highs, lows, bos = deque(maxlen=20), deque(maxlen=20), []
-    for i in range(1, len(close)):
-        if close[i] > close[i - 1]:
-            highs.append(close[i])
-        elif close[i] < close[i - 1]:
-            lows.append(close[i])
+    for i in range(1, len(prices)):
+        if prices[i] > prices[i - 1]:
+            highs.append(prices[i])
+        elif prices[i] < prices[i - 1]:
+            lows.append(prices[i])
         if len(highs) >= 2 and highs[-1] > highs[-2]:
             bos.append((i, 'HH'))
         if len(lows) >= 2 and lows[-1] < lows[-2]:
@@ -150,7 +150,7 @@ def plot_chart(symbol, data, bos, fvg, ob, sl=None, tp=None):
 
     ax.set_title(f'{symbol} + Smart Money Concepts')
     plt.tight_layout()
-    image_path = f'smc_{symbol.replace("=", "")}.png'
+    image_path = f'smc_{symbol.replace("=","")}.png'
     plt.savefig(image_path)
     plt.close()
     return image_path
@@ -179,11 +179,11 @@ async def analyze_pair(symbol, interval, days):
 
     atr = data['High'].rolling(window=14).max() - data['Low'].rolling(window=14).min()
     atr_value = atr.iloc[-1] if not atr.isna().all() else 0
-    price = data['Close'].values[-1]
+    price = data['Close'].iloc[-1]
     sl = price - atr_value if prediction > 0.5 else price + atr_value
     tp = price + 2 * atr_value if prediction > 0.5 else price - 2 * atr_value
 
-    bos_events = detect_bos(data['Close'])  # это Series, а не ndarray
+    bos_events = detect_bos(data['Close'])  # исправлено
     fvg_zones = detect_fvg(data)
     order_blocks = detect_order_blocks(data)
 
