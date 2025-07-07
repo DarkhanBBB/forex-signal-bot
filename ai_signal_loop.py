@@ -10,6 +10,7 @@ from telegram import Bot
 from telegram.constants import ParseMode
 from trading_utils import prepare_data, confidence_score, should_enter_trade
 from twelve_data_api import download
+from model_manager import train_or_load_model
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
@@ -60,7 +61,7 @@ def detect_liquidity_zones(df: pd.DataFrame):
     return liq
 
 
-async def analyze_symbol(symbol, interval, model, model_path, bot, chat_id):
+async def analyze_symbol(symbol, interval, model_path, bot, chat_id):
     logging.info(f"Анализ {symbol} на таймфрейме {interval}")
 
     try:
@@ -72,16 +73,16 @@ async def analyze_symbol(symbol, interval, model, model_path, bot, chat_id):
             logging.warning(f"⚠️ Нет данных по {symbol} ({interval}) — пропуск анализа.")
             return
 
-        features = prepare_data(df)
-        prediction = model.predict(features)
-        confidence = confidence_score(prediction)
-        logging.info(f"Уверенность по {symbol} ({interval}): {confidence:.2f}")
+        x, y, _ = prepare_data(df)
+        model = train_or_load_model(x, y, model_path)
+        prediction = model.predict(x[-1:])[0][0]
 
-        if confidence >= 0.8 and should_enter_trade(prediction):
-            message = f"📈 Сигнал для {symbol} ({interval})\nУверенность: {confidence:.2%}"
+        logging.info(f"Уверенность по {symbol} ({interval}): {prediction:.2f}")
+
+        if prediction >= 0.8 and should_enter_trade(prediction):
+            message = f"📈 Сигнал для {symbol} ({interval})\nУверенность: {prediction:.2%}"
             await bot.send_message(chat_id=chat_id, text=message)
 
-        # Smart Money индикаторы
         bos = detect_bos(df)
         fvg = detect_fvg(df)
         ob = detect_order_blocks(df)
@@ -94,11 +95,6 @@ async def analyze_symbol(symbol, interval, model, model_path, bot, chat_id):
 
 
 async def main():
-    if not os.path.exists(MODEL_PATH):
-        logging.error("❌ Модель не найдена. Обучите модель перед запуском.")
-        return
-
-    model = tf.keras.models.load_model(MODEL_PATH)
     symbols = ["EUR/USD", "XAU/USD"]
     intervals = ["1h", "4h"]
 
@@ -107,8 +103,8 @@ async def main():
     while True:
         for symbol in symbols:
             for interval in intervals:
-                await analyze_symbol(symbol, interval, model, MODEL_PATH, bot, CHAT_ID)
-        await asyncio.sleep(1800)  # 30 минут
+                await analyze_symbol(symbol, interval, MODEL_PATH, bot, CHAT_ID)
+        await asyncio.sleep(1800)
 
 
 if __name__ == "__main__":
