@@ -2,6 +2,10 @@ import asyncio
 import datetime
 import logging
 import os
+# Отключаем OneDNN и GPU
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 import traceback
 
 import numpy as np
@@ -65,7 +69,7 @@ async def analyze_symbol(symbol, interval):
             start = end - datetime.timedelta(days=30)
 
         # ✅ Загрузка данных через Twelve Data
-        new_data = download(symbol, interval)
+        new_data = download(symbol, interval, start, end)
 
         if new_data is None or new_data.empty:
             logger.warning(f"⚠️ Нет данных по {symbol} ({interval}) — пропуск анализа.")
