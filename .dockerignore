@@ -12,3 +12,4 @@ __pycache__/
 .idea/
 tests/
 notebooks/
+!service_account.json

@@ -1,44 +1,32 @@
-# twelve_data_api.py
-import requests
+import os
 import pandas as pd
-from datetime import datetime
+import requests
 
-API_KEY = "0633d31b59084be59ab4499724fa470c"
-BASE_URL = "https://api.twelvedata.com/time_series"
+API_KEY = os.getenv("TWELVE_DATA_API_KEY") or "0633d31b59084be59ab4499724fa470c"
 
-def download(symbol: str, interval: str, start: str, end: str) -> pd.DataFrame:
+def download(symbol, interval, start, end):
+    url = "https://api.twelvedata.com/time_series"
     params = {
         "symbol": symbol,
         "interval": interval,
-        "start_date": start,
-        "end_date": end,
+        "start_date": start.strftime("%Y-%m-%d %H:%M:%S"),
+        "end_date": end.strftime("%Y-%m-%d %H:%M:%S"),
         "apikey": API_KEY,
         "format": "JSON",
         "outputsize": 5000,
-        "dp": 4,
     }
 
-    response = requests.get(BASE_URL, params=params)
+    response = requests.get(url, params=params)
     data = response.json()
 
     if "values" not in data:
-        raise ValueError(f"Ошибка при загрузке данных для {symbol}: {data.get('message', 'Неизвестная ошибка')}")
+        return pd.DataFrame()
 
     df = pd.DataFrame(data["values"])
-    df = df.rename(columns={"datetime": "Date"})
-    df["Date"] = pd.to_datetime(df["Date"])
-    df.set_index("Date", inplace=True)
-
-    numeric_cols = ["open", "high", "low", "close", "volume"]
-    for col in numeric_cols:
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df.set_index("datetime", inplace=True)
+    df = df.sort_index()
+    for col in ["open", "high", "low", "close", "volume"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df = df.rename(columns={
-        "open": "Open",
-        "high": "High",
-        "low": "Low",
-        "close": "Close",
-        "volume": "Volume"
-    })
-
-    return df.sort_index()
+    return df

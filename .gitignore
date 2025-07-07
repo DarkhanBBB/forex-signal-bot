@@ -1,6 +1,3 @@
-# Секретные ключи
-credentials.json
-
 # Модель
 *.h5
 
@@ -22,3 +19,9 @@ Thumbs.db
 
 # Docker build files
 *.tar
+
+.env
+service_account.json
+*.keras
+
+

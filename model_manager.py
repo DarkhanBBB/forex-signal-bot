@@ -2,100 +2,83 @@ import os
 import io
 import logging
 import numpy as np
-import tensorflow as tf
-from google.oauth2 import service_account
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-from trading_utils import prepare_data
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping
 
-# Настройки
-MODEL_NAME = "model.keras"
+# === Google Drive настройки ===
 FOLDER_ID = "12GYefwcJwyo4mI4-MwdZzeLZrCAD1I09"
+MODEL_FILENAME = "model.keras"
 
 # Авторизация
-creds = service_account.Credentials.from_service_account_file(
-    "credentials.json", scopes=["https://www.googleapis.com/auth/drive"]
-)
+creds = Credentials.from_service_account_file("service_account.json", scopes=["https://www.googleapis.com/auth/drive"])
 drive_service = build("drive", "v3", credentials=creds)
 
+def find_model_file():
+    query = f"'{FOLDER_ID}' in parents and name = '{MODEL_FILENAME}' and trashed = false"
+    results = drive_service.files().list(q=query, spaces='drive', fields="files(id, name)").execute()
+    files = results.get("files", [])
+    return files[0] if files else None
 
-def download_model_from_drive(local_path=MODEL_NAME):
-    """Скачивает модель с Google Drive, если она там есть"""
-    logging.info("🔍 Ищем модель на Google Drive...")
-    response = drive_service.files().list(
-        q=f"name='{MODEL_NAME}' and '{FOLDER_ID}' in parents and trashed=false",
-        spaces="drive",
-        fields="files(id, name)"
-    ).execute()
-    files = response.get("files", [])
-
-    if not files:
-        logging.warning("⚠️ Модель не найдена на Google Drive.")
-        return False
-
-    file_id = files[0]["id"]
-    request = drive_service.files().get_media(fileId=file_id)
-    fh = io.FileIO(local_path, "wb")
+def download_model():
+    file = find_model_file()
+    if not file:
+        return None
+    request = drive_service.files().get_media(fileId=file["id"])
+    fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
-
     done = False
     while not done:
         _, done = downloader.next_chunk()
+    fh.seek(0)
+    with open(MODEL_FILENAME, "wb") as f:
+        f.write(fh.read())
+    return load_model(MODEL_FILENAME)
 
-    logging.info("✅ Модель успешно загружена с Google Drive.")
-    return True
-
-
-def upload_model_to_drive(local_path=MODEL_NAME):
-    """Загружает/обновляет модель на Google Drive"""
-    # Ищем файл
-    response = drive_service.files().list(
-        q=f"name='{MODEL_NAME}' and '{FOLDER_ID}' in parents and trashed=false",
-        spaces="drive",
-        fields="files(id, name)"
-    ).execute()
-    files = response.get("files", [])
-
-    media = MediaIoBaseUpload(io.FileIO(local_path, "rb"), mimetype="application/octet-stream")
-
-    if files:
-        file_id = files[0]["id"]
-        drive_service.files().update(fileId=file_id, media_body=media).execute()
-        logging.info("✅ Модель обновлена на Google Drive.")
+def upload_model():
+    file = find_model_file()
+    media = MediaIoBaseUpload(open(MODEL_FILENAME, "rb"), mimetype="application/octet-stream")
+    if file:
+        drive_service.files().update(fileId=file["id"], media_body=media).execute()
     else:
-        file_metadata = {"name": MODEL_NAME, "parents": [FOLDER_ID]}
-        drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-        logging.info("✅ Модель загружена на Google Drive.")
-
+        drive_service.files().create(
+            body={"name": MODEL_FILENAME, "parents": [FOLDER_ID]},
+            media_body=media,
+            fields="id"
+        ).execute()
 
 def create_model(input_shape):
-    """Создаёт простую нейросеть"""
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input(shape=input_shape),
-        tf.keras.layers.LSTM(64, return_sequences=True),
-        tf.keras.layers.LSTM(32),
-        tf.keras.layers.Dense(1, activation="sigmoid")
+    model = Sequential([
+        LSTM(64, return_sequences=True, input_shape=input_shape),
+        Dropout(0.2),
+        LSTM(32),
+        Dropout(0.2),
+        Dense(1, activation='sigmoid')
     ])
-    model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
     return model
 
+def train_or_load_model(X=None, y=None, model_path="model.keras"):
+    if os.path.exists(model_path):
+        logging.info("📥 Загружаю модель из локального файла...")
+        return load_model(model_path)
 
-def train_or_load_model(x_train, y_train, model_path=MODEL_NAME):
-    """Загружает модель из Google Drive или обучает новую"""
-    if not os.path.exists(model_path):
-        found = download_model_from_drive(model_path)
-        if not found:
-            logging.info("🧠 Создаём новую модель.")
-            model = create_model(x_train.shape[1:])
-        else:
-            model = tf.keras.models.load_model(model_path)
-    else:
-        model = tf.keras.models.load_model(model_path)
+    logging.info("☁️ Ищу модель в Google Drive...")
+    model = download_model()
+    if model is not None:
+        logging.info("✅ Модель загружена с Google Drive.")
+        return model
 
-    logging.info("🔁 Начинаем дообучение модели.")
-    model.fit(x_train, y_train, epochs=3, batch_size=32, verbose=0)
+    if X is None or y is None:
+        raise ValueError("Нет обучающих данных для создания новой модели")
+
+    logging.info("🔄 Обучаю новую модель...")
+    model = create_model((X.shape[1], X.shape[2]))
+    model.fit(X, y, epochs=20, batch_size=32, validation_split=0.1, callbacks=[EarlyStopping(patience=3)], verbose=1)
     model.save(model_path)
-    upload_model_to_drive(model_path)
-
-    logging.info("✅ Модель готова к использованию.")
+    upload_model()
+    logging.info("✅ Модель обучена и загружена в Google Drive.")
     return model
