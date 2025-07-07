@@ -2,15 +2,13 @@ import pandas as pd
 
 
 def detect_bos(close_series, window=5):
-    bos_events = []
+    bos = [0] * len(close_series)
     for i in range(window, len(close_series) - window):
         prev_highs = close_series[i - window:i]
-        next_highs = close_series[i + 1:i + window + 1]
-        if close_series[i] > prev_highs.max() and close_series[i] > next_highs.max():
-            bos_events.append((i, 'BOS Up'))
-        elif close_series[i] < prev_highs.min() and close_series[i] < next_highs.min():
-            bos_events.append((i, 'BOS Down'))
-    return bos_events
+        next_highs = close_series[i + 1:i + 1 + window]
+        if close_series.iloc[i] > prev_highs.max() and close_series.iloc[i] > next_highs.max():
+            bos[i] = 1
+    return bos
 
 
 def detect_order_blocks(df, threshold=0.7):
