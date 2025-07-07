@@ -2,7 +2,7 @@ import pandas as pd
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
-from .smart_money_indicators import detect_bos  # или импортируй свои функции
+from smart_money_indicators import detect_bos
 
 def prepare_data(df: pd.DataFrame, sequence_length: int = 60):
     try:
