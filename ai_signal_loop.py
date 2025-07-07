@@ -17,6 +17,7 @@ from model_utils import load_model, save_model, train_model, create_model
 from trading_utils import detect_bos, detect_fvg, detect_order_blocks
 from data_utils import load_data_history, save_data_history, append_new_data, get_combined_data
 from twelve_data_api import download  # ✅ Новый импорт
+from datetime import datetime, timedelta
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -56,60 +57,45 @@ def prepare_data(data):
     y = df['Target'].values
     return X, y
 
-async def analyze_symbol(symbol, interval):
+async def analyze_symbol(symbol, interval, model, model_path, bot, chat_id):
+    logging.info(f"Анализ {symbol} на таймфрейме {interval}")
+    await send_telegram(bot, chat_id, f"📊 Начинаю анализ {symbol} ({interval})")
+
     try:
-        logger.info(f"Анализ {symbol} на таймфрейме {interval}")
-        await send_telegram_message(f"Анализ {symbol} на таймфрейме {interval}")
-
-        # Таймфрейм влияет на количество дней
-        end = datetime.datetime.utcnow()
-        if interval in ['15m', '30m', '1h']:
-            start = end - datetime.timedelta(days=6)
-        else:
-            start = end - datetime.timedelta(days=30)
-
-        # ✅ Загрузка данных через Twelve Data
+        start = datetime.now() - timedelta(days=30)
+        end = datetime.now()
         new_data = download(symbol, interval, start, end)
 
         if new_data is None or new_data.empty:
-            logger.warning(f"⚠️ Нет данных по {symbol} ({interval}) — пропуск анализа.")
-            await send_telegram_message(f"⚠️ Нет данных по {symbol} ({interval}) — пропущено.")
-            return
+            raise ValueError("Нет данных")
 
-        new_data = new_data[~new_data.index.duplicated(keep='first')]
-
-        history_df = load_data_history(symbol, interval)
         X_new, y_new = prepare_data(new_data)
-        updated_df = append_new_data(history_df, new_data, X_new, y_new)
-        save_data_history(symbol, interval, updated_df)
 
-        X, y = get_combined_data(symbol, interval)
+        # Подгружаем историю
+        history_df = load_data_history(symbol, interval)
+        history_df = append_new_data(history_df, new_data, X_new, y_new)
+        save_data_history(symbol, interval, history_df)
 
-        if X.shape[0] < 50:
-            logger.warning(f"Недостаточно данных для анализа {symbol} ({interval})")
-            return
+        # Дообучаем модель
+        model = train_model(model, X_new, y_new, epochs=5)
+        save_model(model, model_path)
 
-        model = load_model(MODEL_PATH)
-        if model is None:
-            model = create_model(X.shape[1])
+        # Предсказания
+        predictions = model.predict(X_new)
+        last_confidence = float(predictions[-1])
+        last_signal = int(last_confidence > 0.5)
 
-        model = train_model(model, X, y)
-        save_model(model, MODEL_PATH)
+        logging.info(f"{symbol} ({interval}) — Уверенность: {last_confidence:.2f}, Сигнал: {last_signal}")
 
-        prediction = model.predict(X[-1].reshape(1, -1))[0][0]
-        confidence = round(float(prediction) * 100, 2)
-
-        if confidence > 80:
-            direction = "BUY" if prediction > 0.5 else "SELL"
-            message = f"✅ Сигнал для {symbol} ({interval}): {direction}\nУверенность: {confidence}%"
-            logger.info(message)
-            await send_telegram_message(message)
+        if last_confidence > 0.8:
+            await send_telegram(
+                bot, chat_id,
+                f"✅ Сигнал по {symbol} ({interval})\nУверенность: {last_confidence:.2%}\nСигнал: {'BUY' if last_signal else 'SELL'}"
+            )
 
     except Exception as e:
-        error_text = f"❌ Ошибка при анализе {symbol} {interval}: {e}"
-        logger.error(error_text)
-        await send_telegram_message(error_text)
-        traceback.print_exc()
+        logging.error(f"❌ Ошибка при анализе {symbol} {interval}: {e}")
+        await send_telegram(bot, chat_id, f"❌ Ошибка при анализе {symbol} ({interval}): {e}")
 
 async def main():
     first_run = True
