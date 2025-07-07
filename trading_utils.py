@@ -2,18 +2,14 @@ import pandas as pd
 
 
 def detect_bos(close_series, window=5):
+    close_series = close_series.reset_index(drop=True)  # Обеспечим числовой индекс
     bos = [0] * len(close_series)
     for i in range(window, len(close_series) - window):
         prev_highs = close_series[i - window:i]
         next_highs = close_series[i + 1:i + 1 + window]
-
         current = close_series[i]
 
-        # Убедимся, что сравниваем значения, а не Series
-        if (
-            current > prev_highs.max() and
-            current > next_highs.max()
-        ):
+        if current > prev_highs.max() and current > next_highs.max():
             bos[i] = 1
     return bos
 
