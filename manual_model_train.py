@@ -32,10 +32,15 @@ if data.empty or len(data) < 100:
     exit()
 
 # === Подготовка данных ===
-data['rsi'] = RSIIndicator(close=data['Close']).rsi()
+from trading_utils import detect_bos, detect_fvg, detect_order_blocks
+data['BOS'] = detect_bos(data['Close'])
+data['FVG'] = detect_fvg(data)
+data['OB'] = detect_order_blocks(data)
 data.dropna(inplace=True)
-X = data[['Close', 'rsi']].values[:-1]
-y = (data['Close'].shift(-1) > data['Close']).astype(int).dropna().values
+X = data[['Open', 'High', 'Low', 'Close', 'Volume', 'BOS', 'FVG', 'OB']].dropna().values
+y = data['Close'].pct_change().shift(-1)
+y = (y > 0).astype(int)
+y = y[-len(X):].values
 y = y[:len(X)]
 
 # === Обучение модели ===

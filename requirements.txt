@@ -3,3 +3,4 @@ pandas
 tensorflow
 yfinance
 python-telegram-bot==20.3
+twelvedata==1.2.4
