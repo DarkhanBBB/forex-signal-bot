@@ -2,12 +2,19 @@ import pandas as pd
 
 
 def detect_bos(close_series, window=5):
-    bos = pd.Series(0, index=close_series.index)
+    bos = [0] * len(close_series)
     for i in range(window, len(close_series) - window):
-        prev_highs = close_series.iloc[i - window:i]
-        next_highs = close_series.iloc[i + 1:i + 1 + window]
-        if close_series.iloc[i] > prev_highs.max() and close_series.iloc[i] > next_highs.max():
-            bos.iloc[i] = 1
+        prev_highs = close_series[i - window:i]
+        next_highs = close_series[i + 1:i + 1 + window]
+
+        current = close_series[i]
+
+        # Убедимся, что сравниваем значения, а не Series
+        if (
+            current > prev_highs.max() and
+            current > next_highs.max()
+        ):
+            bos[i] = 1
     return bos
 
 
