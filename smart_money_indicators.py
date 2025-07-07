@@ -1,18 +1,24 @@
 import pandas as pd
 
-# ======= Break of Structure (BOS) =======
 def detect_bos(df: pd.DataFrame):
+    """
+    Пример простого индикатора Break of Structure (BOS)
+    """
     bos_signals = []
-    for i in range(2, len(df)):
-        prev_high = df['High'].iloc[i - 1]
-        prev_low = df['Low'].iloc[i - 1]
-        curr_close = df['Close'].iloc[i]
 
-        if curr_close > prev_high:
-            bos_signals.append({'index': df.index[i], 'type': 'BOS_up'})
-        elif curr_close < prev_low:
-            bos_signals.append({'index': df.index[i], 'type': 'BOS_down'})
-    return bos_signals
+    for i in range(2, len(df)):
+        if df["high"].iloc[i - 1] > df["high"].iloc[i - 2] and df["high"].iloc[i] < df["high"].iloc[i - 1]:
+            bos_signals.append("BOS down")
+        elif df["low"].iloc[i - 1] < df["low"].iloc[i - 2] and df["low"].iloc[i] > df["low"].iloc[i - 1]:
+            bos_signals.append("BOS up")
+        else:
+            bos_signals.append(None)
+
+    # Подгоняем длину
+    bos_signals = [None, None] + bos_signals
+    df["bos"] = bos_signals
+
+    return df
 
 
 # ======= Fair Value Gap (FVG) =======
