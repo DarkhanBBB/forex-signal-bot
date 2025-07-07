@@ -1,6 +1,8 @@
 numpy
 pandas
-tensorflow
+pip install tensorflow-cpu==2.15.0
 yfinance
 python-telegram-bot==20.3
 twelvedata==1.2.4
+twelvedata
+scikit-learn
