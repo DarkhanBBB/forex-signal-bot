@@ -1,26 +1,27 @@
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
 
-def prepare_data(df):
-    df = df.copy()
-    try:
-        df["BOS"] = [1 if s['type'] == 'BOS_up' else -1 for s in detect_bos(df)]
-        df["FVG"] = [1 if s['type'] == 'FVG_up' else -1 for s in detect_fvg(df)]
-        df["OB"] = [1 if s['type'] == 'OB_bullish' else -1 for s in detect_order_blocks(df)]
-        df["LQZ"] = [1 if s['type'] == 'equal_highs' else -1 for s in detect_liquidity_zones(df)]
 
-        df.dropna(inplace=True)
-        features = ['Open', 'High', 'Low', 'Close', 'Volume', 'BOS', 'FVG', 'OB']  # LQZ можно добавить позже
-        X = df[features].values
-        y = (df['Close'].pct_change().shift(-1) > 0).astype(int)
-        y = y[-len(X):]
-        return X, y
-    except Exception as e:
-        raise ValueError(f"Ошибка при расчёте Smart Money индикаторов: {e}")
+def prepare_data(df, sequence_length=50):
+    data = df[['open', 'high', 'low', 'close', 'volume']].values
+    scaler = MinMaxScaler()
+    data = scaler.fit_transform(data)
 
-def confidence_score(model, X_new):
-    prediction = model.predict(X_new[-1].reshape(1, -1))[0][0]
-    return float(prediction)
+    X, y = [], []
+    for i in range(sequence_length, len(data)):
+        X.append(data[i - sequence_length:i])
+        y.append(data[i, 3])  # close
 
-def should_enter_trade(confidence, threshold=0.8):
-    return confidence > threshold
+    X, y = np.array(X), np.array(y)
+    return X, y, scaler
+
+
+def confidence_score(predicted_price, current_price):
+    change = abs(predicted_price - current_price) / current_price
+    score = 1.0 - change
+    return round(float(score), 4)
+
+
+def should_enter_trade(confidence, threshold=0.80):
+    return confidence >= threshold
