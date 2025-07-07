@@ -1,4 +1,29 @@
 import pandas as pd
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from .smart_money_indicators import detect_bos  # или импортируй свои функции
+
+def prepare_data(df: pd.DataFrame, sequence_length: int = 60):
+    try:
+        df = df.copy()
+        df['BOS'] = detect_bos(df['Close'])
+
+        df.dropna(inplace=True)
+        feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'BOS']
+
+        scaler = MinMaxScaler()
+        df_scaled = scaler.fit_transform(df[feature_cols])
+        
+        X, y = [], []
+        for i in range(sequence_length, len(df_scaled)):
+            X.append(df_scaled[i - sequence_length:i])
+            y.append(df_scaled[i, 3])  # 'Close' цена
+
+        return np.array(X), np.array(y)
+    
+    except Exception as e:
+        raise ValueError(f"Ошибка при подготовке данных: {e}")
 
 
 def detect_bos(close_series, window=5):

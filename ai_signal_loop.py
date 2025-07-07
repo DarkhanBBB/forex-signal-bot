@@ -99,7 +99,7 @@ async def main():
             except:
                 pass
 
-        await asyncio.sleep(1800)  # Пауза 30 минут
+        await asyncio.sleep(1800)
 
 
 if __name__ == "__main__":
