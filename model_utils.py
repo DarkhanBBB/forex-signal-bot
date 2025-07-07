@@ -5,7 +5,7 @@ from tensorflow.keras.models import Sequential, load_model as keras_load_model
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.optimizers import Adam
 
-# Путь к файлу с историческими данными (если будет использоваться)
+# Путь к файлу с историческими данными
 HISTORY_PATH = 'training_data.npz'
 
 # Создание простой нейросети
@@ -31,31 +31,38 @@ def save_model(model, model_path):
 
 # Сохранение обучающих данных в историю
 def save_training_history(X, y):
-    if os.path.exists(HISTORY_PATH):
-        old = np.load(HISTORY_PATH)
-        X_old, y_old = old['X'], old['y']
-        X_combined = np.vstack([X_old, X])
-        y_combined = np.concatenate([y_old, y])
-    else:
-        X_combined, y_combined = X, y
-    np.savez_compressed(HISTORY_PATH, X=X_combined, y=y_combined)
+    try:
+        if os.path.exists(HISTORY_PATH):
+            old = np.load(HISTORY_PATH)
+            if 'X' in old and 'y' in old:
+                X_old, y_old = old['X'], old['y']
+                X_combined = np.vstack([X_old, X])
+                y_combined = np.concatenate([y_old, y])
+            else:
+                X_combined, y_combined = X, y
+        else:
+            X_combined, y_combined = X, y
+        np.savez_compressed(HISTORY_PATH, X=X_combined, y=y_combined)
+    except Exception as e:
+        print(f"⚠️ Ошибка сохранения истории обучения: {e}")
 
 # Загрузка обучающих данных из истории
 def load_training_history():
-    if os.path.exists(HISTORY_PATH):
-        data = np.load(HISTORY_PATH)
-        return data['X'], data['y']
-    return None, None
+    try:
+        if os.path.exists(HISTORY_PATH):
+            data = np.load(HISTORY_PATH)
+            if 'X' in data and 'y' in data:
+                return data['X'], data['y']
+        return None, None
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки истории обучения: {e}")
+        return None, None
 
 # Обучение модели (или дообучение)
 def train_model(model, X_new, y_new, epochs=10):
-    # Сохраняем новые данные к старым
     save_training_history(X_new, y_new)
-    
-    # Загружаем объединённую историю
     X_total, y_total = load_training_history()
 
-    # Если истории нет — обучаем на новых
     if X_total is None or y_total is None:
         X_total, y_total = X_new, y_new
 

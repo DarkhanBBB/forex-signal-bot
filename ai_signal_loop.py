@@ -27,15 +27,13 @@ CHAT_ID = os.environ.get("CHAT_ID")
 
 bot = Bot(token=TOKEN)
 
+
 def send_telegram_message(message):
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.create_task(bot.send_message(chat_id=CHAT_ID, text=message))
-        else:
-            loop.run_until_complete(bot.send_message(chat_id=CHAT_ID, text=message))
+        asyncio.run(bot.send_message(chat_id=CHAT_ID, text=message))
     except Exception as e:
         logger.error(f"Ошибка отправки в Telegram: {e}")
+
 
 def prepare_data(data):
     df = data.copy()
@@ -44,7 +42,7 @@ def prepare_data(data):
     df['Target'] = (df['Return'].shift(-1) > 0).astype(int)
 
     try:
-        df['BOS'] = detect_bos(df['Close'].values)
+        df['BOS'] = detect_bos(df['Close'])
         df['FVG'] = detect_fvg(df)
         df['OB'] = detect_order_blocks(df)
     except Exception as e:
@@ -55,6 +53,7 @@ def prepare_data(data):
     X = df[features].values
     y = df['Target'].values
     return X, y
+
 
 def analyze_symbol(symbol, interval):
     try:
@@ -70,10 +69,9 @@ def analyze_symbol(symbol, interval):
 
         new_data = new_data[~new_data.index.duplicated(keep='first')]
 
-        X_new, y_new = prepare_data(new_data)
-
         history_df = load_data_history(symbol, interval)
-        updated_df = append_new_data(history_df, new_data, y_new)
+        X_new, y_new = prepare_data(new_data)
+        updated_df = append_new_data(history_df, new_data, X_new, y_new)
         save_data_history(symbol, interval, updated_df)
 
         X, y = get_combined_data(symbol, interval)
@@ -103,6 +101,7 @@ def analyze_symbol(symbol, interval):
         send_telegram_message(error_text)
         traceback.print_exc()
 
+
 async def main():
     first_run = True
     while True:
@@ -119,6 +118,7 @@ async def main():
         except asyncio.CancelledError:
             logger.warning("Цикл прерван")
             break
+
 
 if __name__ == '__main__':
     asyncio.run(main())

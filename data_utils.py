@@ -21,14 +21,15 @@ def save_data_history(symbol, interval, df):
     df.to_csv(path)
 
 def append_new_data(history_df, new_df, new_X, new_y):
-    # Добавляем индикаторы и цель в DataFrame
-    df_to_add = new_df.copy()
-    if len(new_X) != len(df_to_add) or len(new_y) != len(df_to_add):
-        raise ValueError("Размерность признаков не совпадает с данными")
+    if len(new_df) < len(new_X) or len(new_df) < len(new_y):
+        raise ValueError("Недостаточно данных в new_df для объединения с признаками")
+
+    # Объединяем данные
+    df_to_add = new_df.tail(len(new_X)).copy()
 
     features = ['Open', 'High', 'Low', 'Close', 'Volume', 'BOS', 'FVG', 'OB']
-    df_features = pd.DataFrame(new_X, columns=features, index=df_to_add.index[-len(new_X):])
-    df_to_add = df_to_add.join(df_features)
+    df_features = pd.DataFrame(new_X, columns=features, index=df_to_add.index)
+    df_to_add[features] = df_features
     df_to_add['Target'] = new_y[-len(df_to_add):]
 
     updated_df = pd.concat([history_df, df_to_add])
@@ -39,6 +40,8 @@ def get_combined_data(symbol, interval):
     df = load_data_history(symbol, interval)
     df = df.dropna()
     features = ['Open', 'High', 'Low', 'Close', 'Volume', 'BOS', 'FVG', 'OB']
+    if not all(f in df.columns for f in features + ['Target']):
+        raise ValueError("Отсутствуют нужные колонки в исторических данных")
     X = df[features].values
     y = df['Target'].values
     return X, y
