@@ -1,79 +1,84 @@
-# model_manager.py
-import os
-import io
+import asyncio
 import logging
-import numpy as np
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
+import os
+from datetime import datetime, timedelta
+from telegram import Bot
+from data_utils import load_data_history, save_data_history, append_new_data, get_combined_data
+from model_manager import train_or_load_model
+from trading_utils import prepare_data, confidence_score, should_enter_trade
+from twelve_data_api import download
 
-FOLDER_ID = "12GYefwcJwyo4mI4-MwdZzeLZrCAD1I09"
-MODEL_FILENAME = "model.keras"
+# Настройки
+SYMBOLS = ["EUR/USD", "XAU/USD"]
+TIMEFRAMES = ["1h", "2h", "3h", "4h"]
+MODEL_PATH = "model.keras"
+LOG_FILE = "bot.log"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-creds = Credentials.from_service_account_file("/app/service_account.json", scopes=["https://www.googleapis.com/auth/drive"])
-drive_service = build("drive", "v3", credentials=creds)
+# Логирование
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+logger = logging.getLogger()
+file_handler = logging.FileHandler(LOG_FILE)
+logger.addHandler(file_handler)
 
-def find_model_file():
-    query = f"'{FOLDER_ID}' in parents and name = '{MODEL_FILENAME}' and trashed = false"
-    results = drive_service.files().list(q=query, spaces='drive', fields="files(id, name)").execute()
-    files = results.get("files", [])
-    return files[0] if files else None
+async def send_message(bot, text):
+    try:
+        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке сообщения в Telegram: {e}")
 
-def download_model():
-    file = find_model_file()
-    if not file:
-        return None
-    request = drive_service.files().get_media(fileId=file["id"])
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    fh.seek(0)
-    with open(MODEL_FILENAME, "wb") as f:
-        f.write(fh.read())
-    return load_model(MODEL_FILENAME)
+async def analyze_symbol(symbol, interval, bot):
+    try:
+        logger.info(f"📊 Анализ {symbol} ({interval})")
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(days=30)
 
-def upload_model():
-    file = find_model_file()
-    media = MediaIoBaseUpload(open(MODEL_FILENAME, "rb"), mimetype="application/octet-stream")
-    if file:
-        drive_service.files().update(fileId=file["id"], media_body=media).execute()
-    else:
-        drive_service.files().create(body={"name": MODEL_FILENAME, "parents": [FOLDER_ID]}, media_body=media).execute()
+        new_data = download(symbol, interval, start_time, end_time)
+        if new_data is None or new_data.empty:
+            await send_message(bot, f"⚠️ Нет данных по {symbol} ({interval})")
+            return
 
-def create_model(input_shape):
-    model = Sequential([
-        LSTM(64, return_sequences=True, input_shape=input_shape),
-        Dropout(0.2),
-        LSTM(32),
-        Dropout(0.2),
-        Dense(1, activation='sigmoid')
-    ])
-    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-    return model
+        X_new, y_new = prepare_data(new_data)
+        if len(X_new) == 0:
+            await send_message(bot, f"⚠️ Недостаточно данных для анализа {symbol} ({interval})")
+            return
 
-def train_or_load_model(X=None, y=None, model_path="model.keras"):
-    if os.path.exists(model_path):
-        logging.info("📥 Загружаю модель из локального файла...")
-        return load_model(model_path)
+        # Обновляем историю
+        history = load_data_history(symbol, interval)
+        updated = append_new_data(history, new_data, X_new, y_new)
+        save_data_history(symbol, interval, updated)
 
-    logging.info("☁️ Ищу модель в Google Drive...")
-    model = download_model()
-    if model is not None:
-        logging.info("✅ Модель загружена с Google Drive.")
-        return model
+        # Объединяем все данные
+        X_total, y_total = get_combined_data(symbol, interval)
+        if X_total.shape[0] == 0:
+            await send_message(bot, f"❌ Нет объединённых данных по {symbol} ({interval})")
+            return
 
-    if X is None or y is None:
-        raise ValueError("Нет обучающих данных для создания новой модели")
+        model = train_or_load_model(X_total, y_total, model_path=MODEL_PATH)
+        prediction = model.predict(X_new[-1].reshape(1, *X_new.shape[1:]))[0]
+        conf = confidence_score(prediction)
+        direction = should_enter_trade(prediction, conf)
 
-    logging.info("🔄 Обучаю новую модель...")
-    model = create_model((X.shape[1], X.shape[2]))
-    model.fit(X, y, epochs=20, batch_size=32, validation_split=0.1, callbacks=[EarlyStopping(patience=3)], verbose=1)
-    model.save(model_path)
-    upload_model()
-    logging.info("✅ Модель обучена и загружена в Google Drive.")
-    return model
+        msg = f"📉 {symbol} ({interval})\nУверенность: {conf:.2f}%"
+        msg += f"\n💡 Сигнал: {direction.upper()}" if direction else "\n⛔ Сигнала нет"
+        await send_message(bot, msg)
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка при анализе {symbol} {interval}: {e}")
+        await send_message(bot, f"❌ Ошибка при анализе {symbol} ({interval}): {e}")
+
+async def main():
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    await send_message(bot, "🤖 Бот запущен и работает 24/7")
+    while True:
+        for symbol in SYMBOLS:
+            for interval in TIMEFRAMES:
+                await analyze_symbol(symbol, interval, bot)
+        await asyncio.sleep(1800)  # каждые 30 минут
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("⛔ Бот остановлен вручную.")

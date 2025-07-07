@@ -1,12 +1,11 @@
 numpy
 pandas
-tensorflow
+scikit-learn
+tensorflow==2.12.0
 python-telegram-bot==20.3
+gspread
 google-api-python-client
 google-auth
 google-auth-oauthlib
-google-auth-httplib2
-twelve-data
-aiohttp
 h5py
-gspread
+python-dotenv

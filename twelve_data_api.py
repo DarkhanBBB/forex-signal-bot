@@ -1,32 +1,36 @@
+
 import os
-import pandas as pd
 import requests
+import pandas as pd
 
-API_KEY = os.getenv("TWELVE_DATA_API_KEY") or "0633d31b59084be59ab4499724fa470c"
+API_KEY = os.getenv("TWELVE_DATA_API_KEY")
+BASE_URL = "https://api.twelvedata.com/time_series"
 
-def download(symbol, interval, start, end):
-    url = "https://api.twelvedata.com/time_series"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "start_date": start.strftime("%Y-%m-%d %H:%M:%S"),
-        "end_date": end.strftime("%Y-%m-%d %H:%M:%S"),
-        "apikey": API_KEY,
-        "format": "JSON",
-        "outputsize": 5000,
-    }
+def download(symbol: str, interval: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+    url = (
+        f"{BASE_URL}?symbol={symbol}&interval={interval}"
+        f"&start_date={start_date.strftime('%Y-%m-%d %H:%M:%S')}"
+        f"&end_date={end_date.strftime('%Y-%m-%d %H:%M:%S')}"
+        f"&apikey={API_KEY}&format=JSON&dp=5"
+    )
+    response = requests.get(url)
+    if response.status_code != 200:
+        raise ValueError(f"Ошибка при запросе данных: {response.text}")
 
-    response = requests.get(url, params=params)
     data = response.json()
-
     if "values" not in data:
-        return pd.DataFrame()
+        raise ValueError(f"Нет данных в ответе API: {data}")
 
     df = pd.DataFrame(data["values"])
-    df["datetime"] = pd.to_datetime(df["datetime"])
-    df.set_index("datetime", inplace=True)
+    df = df.rename(columns={"datetime": "Datetime"})
+    df["Datetime"] = pd.to_datetime(df["Datetime"])
+    df.set_index("Datetime", inplace=True)
     df = df.sort_index()
+
     for col in ["open", "high", "low", "close", "volume"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        else:
+            df[col] = 0.0
 
     return df
